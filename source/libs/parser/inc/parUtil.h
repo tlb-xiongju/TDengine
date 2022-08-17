@@ -35,6 +35,32 @@ extern "C" {
 #define ROWTS_PSEUDO_COLUMN_NAME "_rowts"
 #define C0_PSEUDO_COLUMN_NAME    "_c0"
 
+#define NEXT_TOKEN(pSql, sToken)                \
+  do {                                          \
+    int32_t index = 0;                          \
+    sToken = tStrGetToken(pSql, &index, false); \
+    pSql += index;                              \
+  } while (0)
+
+#define NEXT_TOKEN_WITH_PREV(pSql, sToken)     \
+  do {                                         \
+    int32_t index = 0;                         \
+    sToken = tStrGetToken(pSql, &index, true); \
+    pSql += index;                             \
+  } while (0)
+
+#define NEXT_TOKEN_KEEP_SQL(pSql, sToken, index) \
+  do {                                           \
+    sToken = tStrGetToken(pSql, &index, false);  \
+  } while (0)
+
+#define NEXT_VALID_TOKEN(pSql, sToken)        \
+  do {                                        \
+    sToken.n = tGetToken(pSql, &sToken.type); \
+    sToken.z = pSql;                          \
+    pSql += sToken.n;                         \
+  } while (TK_NK_SPACE == sToken.type)
+
 typedef struct SMsgBuf {
   int32_t len;
   char*   buf;

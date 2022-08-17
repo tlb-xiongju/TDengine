@@ -176,10 +176,40 @@ int32_t qParseSql(SParseContext* pCxt, SQuery** pQuery) {
   return code;
 }
 
+typedef struct SParseProfile {
+  double  minElapsedMs;
+  double  maxElapsedMs;
+  double  totalElapsedMs;
+  int32_t count;
+} SParseProfile;
+
+static void profileRecord(SParseProfile* pProfile, int64_t start) {
+  double elapsed = (taosGetTimestampUs() - start) / 1000.0;
+  if (elapsed < pProfile->minElapsedMs) {
+    pProfile->minElapsedMs = elapsed;
+  }
+  if (elapsed > pProfile->maxElapsedMs) {
+    pProfile->maxElapsedMs = elapsed;
+  }
+  pProfile->totalElapsedMs += elapsed;
+  ++(pProfile->count);
+}
+
+static void profileDump(const SParseProfile* pProfile, const char* func) {
+  if (0 == pProfile->count % 100) {
+    printf("%s count: %d, min: %5.2lfms, avg: %5.2lfms, max: %5.2lfms\n", func, pProfile->count, pProfile->minElapsedMs,
+           pProfile->totalElapsedMs / pProfile->count, pProfile->maxElapsedMs);
+  }
+}
+
 int32_t qParseSqlSyntax(SParseContext* pCxt, SQuery** pQuery, struct SCatalogReq* pCatalogReq) {
+  static SParseProfile profile = {.minElapsedMs = 10000000, .maxElapsedMs = 0, .totalElapsedMs = 0, .count = 0};
+  int64_t              start = taosGetTimestampUs();
+
   SParseMetaCache metaCache = {0};
   int32_t         code = TSDB_CODE_SUCCESS;
-  if (qIsInsertValuesSql(pCxt->pSql, pCxt->sqlLen)) {
+  bool            isInsertValues = qIsInsertValuesSql(pCxt->pSql, pCxt->sqlLen);
+  if (isInsertValues) {
     code = parseInsertSyntax(pCxt, pQuery, &metaCache);
   } else {
     code = parseSqlSyntax(pCxt, pQuery, &metaCache);
@@ -189,11 +219,21 @@ int32_t qParseSqlSyntax(SParseContext* pCxt, SQuery** pQuery, struct SCatalogReq
   }
   destoryParseMetaCache(&metaCache, true);
   terrno = code;
+
+  if (isInsertValues) {
+    profileRecord(&profile, start);
+    profileDump(&profile, "qParseSqlSyntax    ");
+  }
+
   return code;
 }
 
 int32_t qAnalyseSqlSemantic(SParseContext* pCxt, const struct SCatalogReq* pCatalogReq,
                             const struct SMetaData* pMetaData, SQuery* pQuery) {
+  static SParseProfile profile = {.minElapsedMs = 10000000, .maxElapsedMs = 0, .totalElapsedMs = 0, .count = 0};
+  int64_t              start = taosGetTimestampUs();
+  bool                 isInsertValues = (NULL == pQuery->pRoot);
+
   SParseMetaCache metaCache = {0};
   int32_t         code = putMetaDataToCache(pCatalogReq, pMetaData, &metaCache, NULL == pQuery->pRoot);
   if (TSDB_CODE_SUCCESS == code) {
@@ -205,6 +245,12 @@ int32_t qAnalyseSqlSemantic(SParseContext* pCxt, const struct SCatalogReq* pCata
   }
   destoryParseMetaCache(&metaCache, false);
   terrno = code;
+
+  if (isInsertValues) {
+    profileRecord(&profile, start);
+    profileDump(&profile, "qAnalyseSqlSemantic");
+  }
+
   return code;
 }
 

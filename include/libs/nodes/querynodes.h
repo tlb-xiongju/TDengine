@@ -326,6 +326,27 @@ typedef struct SInsertStmt {
   uint8_t    precision;
 } SInsertStmt;
 
+typedef struct SSqlStr {
+  uint32_t n;
+  char*    z;
+} SSqlStr;
+
+typedef struct SInsertTableClause {
+  ENodeType type;  // QUERY_NODE_INSERT_TABLE_CLAUSE
+  SSqlStr   table;
+  SSqlStr   stable;
+  SArray*   pTags;       // element is SSqlStr
+  SArray*   pTagValues;  // element is STagVal
+  SArray*   pCols;       // element is SSqlStr
+  SArray*   pRows;
+  SSqlStr   file;
+} SInsertTableClause;
+
+typedef struct SInsertValuesStmt {
+  ENodeType  type;  // QUERY_NODE_INSERT_VALUES_STMT
+  SNodeList* pInsertTables;
+} SInsertValuesStmt;
+
 typedef enum {
   PAYLOAD_TYPE_KV = 0,
   PAYLOAD_TYPE_RAW = 1,

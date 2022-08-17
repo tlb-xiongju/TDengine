@@ -84,4 +84,15 @@ TEST_F(ParserInsertTest, autoCreateTableTest) {
       "st1s2 (ts, c1, c2) USING st1 TAGS(2, 'abc', now) VALUES (now+1s, 2, 'shanghai')");
 }
 
+TEST_F(ParserInsertTest, longSql) {
+  useDb("root", "test");
+
+  string sql("INSERT INTO t1 VALUES ");
+  for (int32_t i = 0; i < 10000; ++i) {
+    sql.append("(now+" + to_string(i) + "s, " + to_string(i) + ", 'beijing', " + to_string(i + 1) + ", " +
+               to_string(i + 2) + ", " + to_string(i + 3) + ")");
+  }
+  run(sql);
+}
+
 }  // namespace ParserTest

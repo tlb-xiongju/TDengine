@@ -209,6 +209,18 @@ int32_t qParseSqlSyntax(SParseContext* pCxt, SQuery** pQuery, struct SCatalogReq
   SParseMetaCache metaCache = {0};
   int32_t         code = TSDB_CODE_SUCCESS;
   bool            isInsertValues = qIsInsertValuesSql(pCxt->pSql, pCxt->sqlLen);
+
+#if 0
+  if (isInsertValues) {
+    code = parseInsertSyntaxNew(pCxt, pQuery, pCatalogReq);
+  } else {
+    code = parseSqlSyntax(pCxt, pQuery, &metaCache);
+    if (TSDB_CODE_SUCCESS == code) {
+      code = buildCatalogReq(pCxt, &metaCache, pCatalogReq);
+    }
+    destoryParseMetaCache(&metaCache, true);
+  }
+#else
   if (isInsertValues) {
     code = parseInsertSyntax(pCxt, pQuery, &metaCache);
   } else {
@@ -218,6 +230,8 @@ int32_t qParseSqlSyntax(SParseContext* pCxt, SQuery** pQuery, struct SCatalogReq
     code = buildCatalogReq(pCxt, &metaCache, pCatalogReq);
   }
   destoryParseMetaCache(&metaCache, true);
+#endif
+
   terrno = code;
 
   if (isInsertValues) {
@@ -234,16 +248,32 @@ int32_t qAnalyseSqlSemantic(SParseContext* pCxt, const struct SCatalogReq* pCata
   int64_t              start = taosGetTimestampUs();
   bool                 isInsertValues = (NULL == pQuery->pRoot);
 
+#if 0
+  int32_t code = TSDB_CODE_SUCCESS;
+  if (isInsertValues) {
+    code = analyseInsert(pCxt, pCatalogReq, pMetaData, pQuery);
+  } else {
+    SParseMetaCache metaCache = {0};
+    code = putMetaDataToCache(pCatalogReq, pMetaData, &metaCache, false);
+    if (TSDB_CODE_SUCCESS == code) {
+      code = analyseSemantic(pCxt, pQuery, &metaCache);
+    }
+  }
+  destoryParseMetaCache(&metaCache, false);
+}
+#else
   SParseMetaCache metaCache = {0};
-  int32_t         code = putMetaDataToCache(pCatalogReq, pMetaData, &metaCache, NULL == pQuery->pRoot);
+  int32_t         code = putMetaDataToCache(pCatalogReq, pMetaData, &metaCache, isInsertValues);
   if (TSDB_CODE_SUCCESS == code) {
-    if (NULL == pQuery->pRoot) {
+    if (isInsertValues) {
       code = parseInsertSql(pCxt, &pQuery, &metaCache);
     } else {
       code = analyseSemantic(pCxt, pQuery, &metaCache);
     }
   }
   destoryParseMetaCache(&metaCache, false);
+#endif
+
   terrno = code;
 
   if (isInsertValues) {

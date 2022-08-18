@@ -48,8 +48,6 @@ typedef struct SInsertParseContext {
   SParseMetaCache*   pMetaCache;
   char               sTableName[TSDB_TABLE_NAME_LEN];
   char               tmpTokenBuf[TSDB_MAX_BYTES_PER_ROW];
-  int64_t            memElapsed;
-  int64_t            parRowElapsed;
 } SInsertParseContext;
 
 typedef struct SInsertParseSyntaxCxt {
@@ -85,19 +83,6 @@ typedef struct SMemParam {
       return code;                   \
     }                                \
   } while (0)
-
-static int32_t skipInsertInto(char** pSql, SMsgBuf* pMsg) {
-  SToken sToken;
-  NEXT_TOKEN(*pSql, sToken);
-  if (TK_INSERT != sToken.type && TK_IMPORT != sToken.type) {
-    return buildSyntaxErrMsg(pMsg, "keyword INSERT is expected", sToken.z);
-  }
-  NEXT_TOKEN(*pSql, sToken);
-  if (TK_INTO != sToken.type) {
-    return buildSyntaxErrMsg(pMsg, "keyword INTO is expected", sToken.z);
-  }
-  return TSDB_CODE_SUCCESS;
-}
 
 static int32_t createSName(SName* pName, SToken* pTableName, int32_t acctId, const char* dbName, SMsgBuf* pMsgBuf) {
   const char* msg1 = "name too long";
@@ -1526,9 +1511,7 @@ int32_t parseInsertSql(SParseContext* pContext, SQuery** pQuery, SParseMetaCache
       .totalNum = 0,
       .pOutput = (SVnodeModifOpStmt*)nodesMakeNode(QUERY_NODE_VNODE_MODIF_STMT),
       .pStmtCb = pContext->pStmtCb,
-      .pMetaCache = pMetaCache,
-      .memElapsed = 0,
-      .parRowElapsed = 0};
+      .pMetaCache = pMetaCache};
 
   if (pContext->pStmtCb && *pQuery) {
     (*pContext->pStmtCb->getExecInfoFn)(pContext->pStmtCb->pStmt, &context.pVgroupsHashObj,

@@ -15,6 +15,7 @@
 
 #include "parUtil.h"
 #include "cJSON.h"
+#include "parToken.h"
 #include "querynodes.h"
 
 #define USER_AUTH_KEY_MAX_LEN TSDB_USER_LEN + TSDB_DB_FNAME_LEN + 2
@@ -1166,4 +1167,17 @@ void destoryParseMetaCache(SParseMetaCache* pMetaCache, bool request) {
   taosHashCleanup(pMetaCache->pUdf);
   taosHashCleanup(pMetaCache->pTableIndex);
   taosHashCleanup(pMetaCache->pTableCfg);
+}
+
+int32_t skipInsertInto(char** pSql, SMsgBuf* pMsg) {
+  SToken sToken;
+  NEXT_TOKEN(*pSql, sToken);
+  if (TK_INSERT != sToken.type && TK_IMPORT != sToken.type) {
+    return buildSyntaxErrMsg(pMsg, "keyword INSERT is expected", sToken.z);
+  }
+  NEXT_TOKEN(*pSql, sToken);
+  if (TK_INTO != sToken.type) {
+    return buildSyntaxErrMsg(pMsg, "keyword INTO is expected", sToken.z);
+  }
+  return TSDB_CODE_SUCCESS;
 }

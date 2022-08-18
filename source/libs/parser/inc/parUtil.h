@@ -54,12 +54,12 @@ extern "C" {
     sToken = tStrGetToken(pSql, &index, false);  \
   } while (0)
 
-#define NEXT_VALID_TOKEN(pSql, sToken)        \
-  do {                                        \
-    sToken.n = tGetToken(pSql, &sToken.type); \
-    sToken.z = pSql;                          \
-    pSql += sToken.n;                         \
-  } while (TK_NK_SPACE == sToken.type)
+#define NEXT_VALID_TOKEN(pSql, sToken)              \
+  do {                                              \
+    (sToken).n = tGetToken(pSql, &((sToken).type)); \
+    (sToken).z = pSql;                              \
+    pSql += (sToken).n;                             \
+  } while (TK_NK_SPACE == (sToken).type)
 
 typedef struct SMsgBuf {
   int32_t len;
@@ -117,6 +117,8 @@ STableComInfo getTableInfo(const STableMeta* pTableMeta);
 STableMeta*   tableMetaDup(const STableMeta* pTableMeta);
 
 int32_t trimString(const char* src, int32_t len, char* dst, int32_t dlen);
+
+int32_t skipInsertInto(char** pSql, SMsgBuf* pMsg);
 
 int32_t buildCatalogReq(SParseContext* pCxt, const SParseMetaCache* pMetaCache, SCatalogReq* pCatalogReq);
 int32_t putMetaDataToCache(const SCatalogReq* pCatalogReq, const SMetaData* pMetaData, SParseMetaCache* pMetaCache,

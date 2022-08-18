@@ -27,6 +27,8 @@ extern "C" {
 #define QUERY_SMA_OPTIMIZE_DISABLE 0
 #define QUERY_SMA_OPTIMIZE_ENABLE  1
 
+int32_t parseInsertSyntaxNew(SParseContext* pContext, SQuery** pQuery, SCatalogReq* pCatalogReq);
+int32_t analyseInsert(SParseContext* pCxt, const SCatalogReq* pCatalogReq, const SMetaData* pMetaData, SQuery* pQuery);
 int32_t parseInsertSyntax(SParseContext* pContext, SQuery** pQuery, SParseMetaCache* pMetaCache);
 int32_t parseInsertSql(SParseContext* pContext, SQuery** pQuery, SParseMetaCache* pMetaCache);
 int32_t parse(SParseContext* pParseCxt, SQuery** pQuery);

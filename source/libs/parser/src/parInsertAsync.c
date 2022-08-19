@@ -266,9 +266,9 @@ static int32_t createDbHash(SInsertValuesStmt* pStmt, SHashObj** pDbHash) {
 }
 
 static void destoryDbHash(SHashObj* pDbHash) {
-  STableMetaSet* p = taosHashIterate(pDbHash, NULL);
+  void* p = taosHashIterate(pDbHash, NULL);
   while (NULL != p) {
-    destoryTableMetaSet(p);
+    destoryTableMetaSet(*(STableMetaSet**)p);
     p = taosHashIterate(pDbHash, p);
   }
   taosHashCleanup(pDbHash);

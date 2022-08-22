@@ -28,6 +28,11 @@ typedef struct STableMetaSet {
   SHashObj* pTableVgroup;
 } STableMetaSet;
 
+typedef struct SInsertAnalyseSemanticCxt {
+  SParseContext* pComCxt;
+  SHashObj*      pVgroups;
+} SInsertAnalyseSemanticCxt;
+
 // required syntax: 'TAGS (tag1_value, ...)', pToken -> 'TAGS', pSql -> '('
 static int32_t parseTagsClauseSyntax(SInsertParseSyntaxCxt* pCxt, SToken* pToken, SInsertTableClause* pClause) {
   if (TK_TAGS != pToken->type) {
@@ -274,8 +279,8 @@ static void destoryDbHash(SHashObj* pDbHash) {
   taosHashCleanup(pDbHash);
 }
 
-STableMetaSet* assignTableMetaSet(SHashObj* pDbHash, const char* pKey, int32_t keyLen, int32_t acctId,
-                                  int32_t estimatedTableNum) {
+static STableMetaSet* assignTableMetaSet(SHashObj* pDbHash, const char* pKey, int32_t keyLen, int32_t acctId,
+                                         int32_t estimatedTableNum) {
   STableMetaSet* pSet = taosHashGet(pDbHash, pKey, keyLen);
   if (NULL == pSet) {
     pSet = taosMemoryMalloc(sizeof(STableMetaSet));
@@ -502,7 +507,181 @@ int32_t parseInsertSyntaxNew(SParseContext* pContext, SQuery** pQuery, SCatalogR
   return code;
 }
 
-int32_t analyseInsert(SParseContext* pCxt, const SCatalogReq* pCatalogReq, const SMetaData* pMetaData, SQuery* pQuery) {
-  // todo
+static int32_t getMetaData(SArray* pMeta, int32_t index, void** pData) {
+  SMetaRes* pRes = taosArrayGet(pMeta, index);
+  if (TSDB_CODE_SUCCESS != pRes->code) {
+    return pRes->code;
+  }
+  *pData = pRes->pRes;
   return TSDB_CODE_SUCCESS;
+}
+
+static int32_t findCol(const char* pColname, int32_t len, int32_t start, int32_t end, SSchema* pSchema) {
+  while (start < end) {
+    if (strlen(pSchema[start].name) == len && strncmp(pColname, pSchema[start].name, pColname->n) == 0) {
+      return start;
+    }
+    ++start;
+  }
+  return -1;
+}
+
+static void initColVal(SSchema* pSchema, SColVal* pColVal) {
+  pColVal->cid = pSchema->colId;
+  pColVal->type = pSchema->type;
+}
+
+static int32_t createRowTemplateUseBoundCols(const SSchema* pSchemas, SArray* pBoundCols, SArray** pRowTemplate) {
+  *pRowTemplate = taosArrayInit(taosArrayGetSize(pBoundCols), sizeof(SColVal));
+  if (NULL == *pRowTemplate) {
+    return TSDB_CODE_OUT_OF_MEMORY;
+  }
+
+  int32_t nCols = taosArrayGetSize(pBoundCols);
+  int32_t lastColIdx = -1;  // last column found
+  for (int32_t i = 0; i < nCols; ++i) {
+    SSqlStr* pStr = taosArrayGet(pBoundCols, i);
+    int32_t  startIndex = lastColIdx + 1;
+    int32_t  index = findCol(&sToken, startIndex, nCols, pSchemas);
+    if (index < 0 && startIndex > 0) {
+      index = findCol(&sToken, 0, startIndex, pSchemas);
+    }
+    if (index < 0) {
+      return generateSyntaxErrMsg(&pCxt->msg, TSDB_CODE_PAR_INVALID_COLUMN, pStr->z);
+    }
+    if (pSchemas[index].flags & COL_EXT_HOLD) {
+      return buildSyntaxErrMsg(&pCxt->msg, "duplicated column name", pStr->z);
+    }
+    pSchemas[index].flags |= COL_EXT_HOLD;
+    SColVal colVal;
+    initColVal(pSchemas[index], &colVal);
+    taosArrayPush(*pRowTemplate, &colVal);
+  }
+  return TSDB_CODE_SUCCESS;
+}
+
+static int32_t createRowTemplateUseSchema(const STableMeta* pMeta, SArray** pRowTemplate) {
+  *pRowTemplate = taosArrayInit(getNumOfColumns(pMeta), sizeof(SColVal));
+  if (NULL == *pRowTemplate) {
+    return TSDB_CODE_OUT_OF_MEMORY;
+  }
+
+  SSchema* pSchemas = getTableColumnSchema(pMeta);
+  SColVal  colVal;
+  for (int32_t i = 0; i < pMeta->tableInfo.numOfColumns; ++i) {
+    initColVal(pSchemas + i, &colVal);
+    taosArrayPush(*pRowTemplate, &colVal);
+  }
+  return TSDB_CODE_SUCCESS;
+}
+
+static int32_t createRowTemplate(const STableMeta* pMeta, SArray* pBoundCols, SArray** pRowTemplate) {
+  if (NULL == pBoundCols) {
+    return createRowTemplateUseSchema(pMeta, pRowTemplate);
+  }
+  return createRowTemplateUseBoundCols(getTableColumnSchema(pMeta), pBoundCols, pRowTemplate);
+}
+
+static int32_t analyseRowData(SArray* pRowStr, SArray* pRowTemplate, SArray* pIndex, STableDataBlocks* pBlocks) {
+  int32_t code = TSDB_CODE_SUCCESS;
+  int16_t nCols = taosArrayGetSize(pRowStr);
+  for (int16_t i = 0; TSDB_CODE_SUCCESS == code && i < nCols; ++i) {
+    int16_t index = (NULL == pIndex ? i : *(int16_t*)taosArrayGet(pIndex, i));
+    code = setColVal((SSqlStr*)taosArrayGet(pRowStr, i), (SColVal*)taosArrayGet(pRowTemplate, index));
+  }
+  STSRow2* pRow = pBlocks->pData + pBlocks->size;
+  if (TSDB_CODE_SUCCESS == code) {
+    code = tTSRowNew(NULL, pRowTemplate, NULL, &pRow);
+  }
+  if (TSDB_CODE_SUCCESS == code) {
+    int32_t rowLen = 0;
+    TSROW_LEN(pRow, rowLen);
+    pBlocks->size += rowLen;
+  }
+  return code;
+}
+
+static int32_t comparColId(const void* l, const void* r) {
+  SColVal* pLeft = l;
+  SColVal* pRight = r;
+  return pLeft->cid < pRight->cid ? -1 : (pLeft->cid > pRight->cid ? 1 : 0);
+}
+
+static int32_t createBoundColsIndex(SArray* pRowTemplate, SArray** pIndex) {
+  int16_t nCols = taosArrayGetSize(pRowTemplate);
+  *pIndex = taosArrayInit(nCols, sizeof(int16_t));
+  if (NULL == *pIndex) {
+    return TSDB_CODE_OUT_OF_MEMORY;
+  }
+  taosArraySetSize(*pIndex, nCols);
+  taosArraySort(pRowTemplate, comparColId);
+  for (int16_t i = 0; i < nCols; ++i) {
+    SColVal* pColVal = taosArrayGet(pRowTemplate, i);
+    int16_t* pPos = taosArrayGet(*pIndex, pColVal->value.i16);
+    *pPos = i;
+  }
+  return TSDB_CODE_SUCCESS;
+}
+
+static int32_t analyseMultiRowsData(SInsertTableClause* pClause, SArray* pRowTemplate, STableDataBlocks* pBlocks) {
+  int32_t code = TSDB_CODE_SUCCESS;
+  SArray* pIndex = NULL;
+  if (NULL != pClause->pCols) {
+    code = createBoundColsIndex(pRowTemplate, &pIndex);
+  }
+  int32_t nRows = taosArrayGetSize(pClause->pRows);
+  for (int32_t i = 0; TSDB_CODE_SUCCESS == code && i < nRows; ++i) {
+    code = analyseRowData((SArray*)taosArrayGetP(pClause->pRows, i), pRowTemplate, pIndex, pBlocks);
+  }
+  return code;
+}
+
+static int32_t analyseDataOfOneClause(SInsertAnalyseSemanticCxt* pCxt, const STableMeta* pMeta, SVgroupInfo* pVg,
+                                      SInsertTableClause* pClause) {
+  SVCreateTbReq createReq = {0};
+  if (NULL != pClause->usignDb.z) {
+    // todo build SVCreateTbReq
+  }
+  SArray*           pRowTemplate;
+  int32_t           code = createRowTemplate(pMeta, pClause->pCols, &pRowTemplate);
+  STableDataBlocks* pBlocks = NULL;
+  if (TSDB_CODE_SUCCESS == code) {
+    code = getDataBlockFromList(pCxt->pVgroups, &pVg->vgId, sizeof(pVg->vgId), TSDB_DEFAULT_PAYLOAD_SIZE,
+                                sizeof(SSubmitBlk), getTableInfo(pMeta).rowSize, pMeta, &pBlocks, NULL, &createReq);
+  }
+  if (TSDB_CODE_SUCCESS == code) {
+    code = analyseMultiRowsData(pClause, pRowTemplate, pBlocks);
+  }
+  return code;
+}
+
+static int32_t analyseAllDataOfOneTable(const SMetaData* pMetaData, SInsertValuesStmt* pStmt, SVgroupInfo* pVg,
+                                        SArray* pClausePosList) {
+  int32_t     code = TSDB_CODE_SUCCESS;
+  STableMeta* pMeta = NULL;
+  int32_t     nClauses = taosArrayGetSize(pClausePosList);
+  for (int32_t i = 0; TSDB_CODE_SUCCESS == code && i < nClauses; ++i) {
+    int32_t clauseIndex = *(int32_t*)taosArrayGet(pClausePosList, i);
+    code = getMetaData(pMetaData->pTableMeta, *(int32_t*)taosArrayGet(pStmt->pTableMetaPos, clauseIndex), &pMeta);
+    if (TSDB_CODE_SUCCESS == code) {
+      code = analyseDataOfOneClause((STableMeta*)pRes->pRes, pVg,
+                                    (SInsertTableClause*)taosArrayGetP(pStmt->pInsertTables, clauseIndex));
+    }
+  }
+  return code;
+}
+
+int32_t analyseInsert(SParseContext* pCxt, const SCatalogReq* pCatalogReq, const SMetaData* pMetaData, SQuery* pQuery) {
+  SInsertValuesStmt* pStmt = (SInsertValuesStmt*)pQuery->pRoot;
+
+  int32_t      code = TSDB_CODE_SUCCESS;
+  SVgroupInfo* pVg = NULL;
+  int32_t      nTargetTables = taosArrayGetSize(pMetaData->pTableHash);
+  for (int32_t i = 0; TSDB_CODE_SUCCESS == code && i < nTargetTables; ++i) {
+    code = getMetaData(pMetaData->pTableHash, i, &pVg);
+    if (TSDB_CODE_SUCCESS == code) {
+      code = analyseAllDataOfOneTable(pMetaData, pStmt, pVg, (SArray*)taosArrayGetP(pStmt->pTableVgroupPos, i));
+    }
+  }
+  return code;
 }

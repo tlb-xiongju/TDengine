@@ -70,7 +70,7 @@ int     tValueCmprFn(const SValue *pValue1, const SValue *pValue2, int8_t type);
 #define COL_VAL_VALUE(CID, TYPE, V) ((SColVal){.cid = (CID), .type = (TYPE), .value = (V)})
 
 // STSRow2
-#define TSROW_LEN(PROW, V)  tGetI32v((uint8_t *)(PROW)->data, (V) ? &(V) : NULL)
+#define TSROW_LEN(PROW, V)  tGetI32v((uint8_t *)(PROW)->data, &(V))
 #define TSROW_SVER(PROW, V) tGetI32v((PROW)->data + TSROW_LEN(PROW, NULL), (V) ? &(V) : NULL)
 
 int32_t tTSRowNew(STSRowBuilder *pBuilder, SArray *pArray, STSchema *pTSchema, STSRow2 **ppRow);
@@ -171,7 +171,7 @@ struct SColVal {
 
 #pragma pack(push, 1)
 struct STagVal {
-//  char colName[TSDB_COL_NAME_LEN]; // only used for tmq_get_meta
+  //  char colName[TSDB_COL_NAME_LEN]; // only used for tmq_get_meta
   union {
     int16_t cid;
     char   *pKey;

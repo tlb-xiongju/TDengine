@@ -338,18 +338,19 @@ typedef struct SInsertTableClause {
   SSqlStr   usignDb;
   SSqlStr   usignStable;
   SArray*   pTags;       // element is SSqlStr
-  SArray*   pTagValues;  // element is STagVal
+  SArray*   pTagValues;  // element is SSqlStr
   SArray*   pCols;       // element is SSqlStr
-  SArray*   pRows;
+  SArray*   pRows;       // element is SArray<SSqlStr>
   SSqlStr   file;
 } SInsertTableClause;
 
 typedef struct SInsertValuesStmt {
-  ENodeType  type;  // QUERY_NODE_INSERT_VALUES_STMT
-  SNodeList* pInsertTables;
-  int32_t    autoCreateTableNum;
-  SArray*    pTableMetaPos;    // sql table pos => catalog data pos
-  SArray*    pTableVgroupPos;  // sql table pos => catalog data pos
+  ENodeType type;           // QUERY_NODE_INSERT_VALUES_STMT
+  SArray*   pInsertTables;  // element is SInsertTableClause*
+  int32_t   autoCreateTableNum;
+  // SArray*    pTableMetaPos;    // sql table pos => catalog data pos
+  SArray* pTableVgroupPos;  // sql table pos => catalog data pos
+  SArray* pTableMetaPos;    // catalog data pos => sql table pos list
 } SInsertValuesStmt;
 
 typedef enum {

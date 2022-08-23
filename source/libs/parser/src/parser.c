@@ -165,17 +165,6 @@ static void rewriteExprAlias(SNode* pRoot) {
   rewriteQueryExprAlias(pRoot, &no);
 }
 
-int32_t qParseSql(SParseContext* pCxt, SQuery** pQuery) {
-  int32_t code = TSDB_CODE_SUCCESS;
-  if (qIsInsertValuesSql(pCxt->pSql, pCxt->sqlLen)) {
-    code = parseInsertSql(pCxt, pQuery, NULL);
-  } else {
-    code = parseSqlIntoAst(pCxt, pQuery);
-  }
-  terrno = code;
-  return code;
-}
-
 typedef struct SParseProfile {
   double  minElapsedMs;
   double  maxElapsedMs;
@@ -197,9 +186,30 @@ static void profileRecord(SParseProfile* pProfile, int64_t start) {
 
 static void profileDump(const SParseProfile* pProfile, const char* func) {
   if (0 == pProfile->count % 100) {
-    printf("%s count: %d, min: %5.2lfms, avg: %5.2lfms, max: %5.2lfms\n", func, pProfile->count, pProfile->minElapsedMs,
-           pProfile->totalElapsedMs / pProfile->count, pProfile->maxElapsedMs);
+    printf("%20s count: %d, min: %5.2lfms, avg: %5.2lfms, max: %5.2lfms\n", func, pProfile->count,
+           pProfile->minElapsedMs, pProfile->totalElapsedMs / pProfile->count, pProfile->maxElapsedMs);
   }
+}
+
+int32_t qParseSql(SParseContext* pCxt, SQuery** pQuery) {
+  static SParseProfile profile = {.minElapsedMs = 10000000, .maxElapsedMs = 0, .totalElapsedMs = 0, .count = 0};
+  int64_t              start = taosGetTimestampUs();
+
+  int32_t code = TSDB_CODE_SUCCESS;
+  bool    isInsertValues = qIsInsertValuesSql(pCxt->pSql, pCxt->sqlLen);
+  if (isInsertValues) {
+    code = parseInsertSql(pCxt, pQuery, NULL);
+  } else {
+    code = parseSqlIntoAst(pCxt, pQuery);
+  }
+  terrno = code;
+
+  if (isInsertValues) {
+    profileRecord(&profile, start);
+    profileDump(&profile, "qParseSql");
+  }
+
+  return code;
 }
 
 int32_t qParseSqlSyntax(SParseContext* pCxt, SQuery** pQuery, struct SCatalogReq* pCatalogReq) {
@@ -210,7 +220,7 @@ int32_t qParseSqlSyntax(SParseContext* pCxt, SQuery** pQuery, struct SCatalogReq
   int32_t         code = TSDB_CODE_SUCCESS;
   bool            isInsertValues = qIsInsertValuesSql(pCxt->pSql, pCxt->sqlLen);
 
-#if 0
+#if 1
   if (isInsertValues) {
     code = parseInsertSyntaxNew(pCxt, pQuery, pCatalogReq);
   } else {
@@ -236,7 +246,7 @@ int32_t qParseSqlSyntax(SParseContext* pCxt, SQuery** pQuery, struct SCatalogReq
 
   if (isInsertValues) {
     profileRecord(&profile, start);
-    profileDump(&profile, "qParseSqlSyntax    ");
+    profileDump(&profile, "qParseSqlSyntax");
   }
 
   return code;
@@ -246,9 +256,9 @@ int32_t qAnalyseSqlSemantic(SParseContext* pCxt, const struct SCatalogReq* pCata
                             const struct SMetaData* pMetaData, SQuery* pQuery) {
   static SParseProfile profile = {.minElapsedMs = 10000000, .maxElapsedMs = 0, .totalElapsedMs = 0, .count = 0};
   int64_t              start = taosGetTimestampUs();
-  bool                 isInsertValues = (NULL == pQuery->pRoot);
 
-#if 0
+#if 1
+  bool    isInsertValues = (QUERY_NODE_INSERT_VALUES_STMT == nodeType(pQuery->pRoot));
   int32_t code = TSDB_CODE_SUCCESS;
   if (isInsertValues) {
     code = analyseInsert(pCxt, pCatalogReq, pMetaData, pQuery);
@@ -258,10 +268,10 @@ int32_t qAnalyseSqlSemantic(SParseContext* pCxt, const struct SCatalogReq* pCata
     if (TSDB_CODE_SUCCESS == code) {
       code = analyseSemantic(pCxt, pQuery, &metaCache);
     }
+    destoryParseMetaCache(&metaCache, false);
   }
-  destoryParseMetaCache(&metaCache, false);
-}
 #else
+  bool            isInsertValues = (NULL == pQuery->pRoot);
   SParseMetaCache metaCache = {0};
   int32_t         code = putMetaDataToCache(pCatalogReq, pMetaData, &metaCache, isInsertValues);
   if (TSDB_CODE_SUCCESS == code) {

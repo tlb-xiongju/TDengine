@@ -87,12 +87,15 @@ TEST_F(ParserInsertTest, autoCreateTableTest) {
 TEST_F(ParserInsertTest, longSql) {
   useDb("root", "test");
 
-  string sql("INSERT INTO t1 VALUES ");
-  for (int32_t i = 0; i < 10000; ++i) {
-    sql.append("(now+" + to_string(i) + "s, " + to_string(i) + ", 'beijing', " + to_string(i + 1) + ", " +
-               to_string(i + 2) + ", " + to_string(i + 3) + ")");
+  int32_t sqlCount = 1000;
+  while (sqlCount--) {
+    string sql("INSERT INTO t1 VALUES ");
+    for (int32_t i = 0; i < 10000; ++i) {
+      sql.append("(now+" + to_string(i) + "s, " + to_string(i) + ", 'beijing', " + to_string(i + 1) + ", " +
+                 to_string(i + 2) + ", " + to_string(i + 3) + ")");
+    }
+    run(sql);
   }
-  run(sql);
 }
 
 }  // namespace ParserTest

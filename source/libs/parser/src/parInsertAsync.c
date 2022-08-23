@@ -367,7 +367,7 @@ static int32_t buildTableReq(int32_t acctId, const char* pDbName, SHashObj* pTab
   }
   snprintf(req.dbFName, sizeof(req.dbFName), "%d.%s", acctId, pDbName);
 
-  SName name = {.type = T_NAME_TABLE, .acctId = acctId};
+  SName name = {.type = TSDB_TABLE_NAME_T, .acctId = acctId};
   strcpy(name.dbname, pDbName);
   int32_t* p = taosHashIterate(pTable, NULL);
   while (NULL != p) {
@@ -376,6 +376,7 @@ static int32_t buildTableReq(int32_t acctId, const char* pDbName, SHashObj* pTab
     strncpy(name.tname, pKey, keyLen);
     taosArrayPush(req.pTables, &name);
     taosArrayPush(pPos, p);
+    // taosArraySet();
     p = taosHashIterate(pTable, p);
   }
 
@@ -408,17 +409,18 @@ static int32_t initCatalogReq(SInsertValuesStmt* pStmt, SHashObj* pDbHash, SCata
 
 static int32_t setCatalogReq(SInsertParseSyntaxCxt* pCxt, SInsertValuesStmt* pStmt, SHashObj* pDbHash,
                              SCatalogReq* pCatalogReq) {
-  int32_t        code = TSDB_CODE_SUCCESS;
-  STableMetaSet* p = taosHashIterate(pDbHash, NULL);
+  int32_t code = TSDB_CODE_SUCCESS;
+  void*   p = taosHashIterate(pDbHash, NULL);
   while (NULL != p && TSDB_CODE_SUCCESS == code) {
-    code =
-        buildTableReq(pCxt->pComCxt->acctId, p->dbName, p->pTableMeta, pCatalogReq->pTableMeta, pStmt->pTableMetaPos);
+    STableMetaSet* pSet = *(STableMetaSet**)p;
+    code = buildTableReq(pCxt->pComCxt->acctId, pSet->dbName, pSet->pTableMeta, pCatalogReq->pTableMeta,
+                         pStmt->pTableMetaPos);
     if (TSDB_CODE_SUCCESS == code) {
-      code = buildTableReq(pCxt->pComCxt->acctId, p->dbName, p->pTableVgroup, pCatalogReq->pTableHash,
+      code = buildTableReq(pCxt->pComCxt->acctId, pSet->dbName, pSet->pTableVgroup, pCatalogReq->pTableHash,
                            pStmt->pTableVgroupPos);
     }
     if (TSDB_CODE_SUCCESS == code) {
-      code = buildUserAuthReq(pCxt->pComCxt->pUser, pCxt->pComCxt->acctId, p->dbName, pCatalogReq->pUser);
+      code = buildUserAuthReq(pCxt->pComCxt->pUser, pCxt->pComCxt->acctId, pSet->dbName, pCatalogReq->pUser);
     }
     if (TSDB_CODE_SUCCESS == code) {
       p = taosHashIterate(pDbHash, p);
@@ -450,6 +452,16 @@ static int32_t checkAndbuildCatalogReq(SInsertParseSyntaxCxt* pCxt, SInsertValue
   return code;
 }
 
+static int32_t estimateNumOfTargetTables(int32_t sqlLen) { return sqlLen / 64; }
+
+static int32_t initInsertValuesStmt(SInsertParseSyntaxCxt* pCxt, SInsertValuesStmt* pStmt) {
+  pStmt->pInsertTables = taosArrayInit(estimateNumOfTargetTables(pCxt->pComCxt->sqlLen), POINTER_BYTES);
+  if (NULL == pStmt->pInsertTables) {
+    return TSDB_CODE_OUT_OF_MEMORY;
+  }
+  return TSDB_CODE_SUCCESS;
+}
+
 // tb_name
 //   [USING stb_name [(tag1_name, ...)] TAGS (tag1_value, ...)]
 //   [(field1_name, ...)]
@@ -461,7 +473,7 @@ static int32_t parseInsertBodySyntax(SInsertParseSyntaxCxt* pCxt, SQuery* pQuery
     return TSDB_CODE_OUT_OF_MEMORY;
   }
 
-  int32_t code = TSDB_CODE_SUCCESS;
+  int32_t code = initInsertValuesStmt(pCxt, pStmt);
   SToken  token;
   // for each table
   while (TSDB_CODE_SUCCESS == code) {
@@ -686,13 +698,26 @@ int32_t analyseInsertData(SInsertAnalyseSemanticCxt* pCxt, const SCatalogReq* pC
                           SQuery* pQuery) {
   SInsertValuesStmt* pStmt = (SInsertValuesStmt*)pQuery->pRoot;
 
-  int32_t      code = TSDB_CODE_SUCCESS;
+  int32_t code = TSDB_CODE_SUCCESS;
+  // SVgroupInfo* pVg = NULL;
+  // int32_t      nTargetTables = taosArrayGetSize(pMetaData->pTableHash);
+  // for (int32_t i = 0; TSDB_CODE_SUCCESS == code && i < nTargetTables; ++i) {
+  //   code = getMetaData(pMetaData->pTableHash, i, (void**)&pVg);
+  //   if (TSDB_CODE_SUCCESS == code) {
+  //     code = analyseAllDataOfOneTable(pCxt, pMetaData, pStmt, pVg, (SArray*)taosArrayGetP(pStmt->pTableVgroupPos,
+  //     i));
+  //   }
+  // }
+  STableMeta*  pMeta = NULL;
   SVgroupInfo* pVg = NULL;
-  int32_t      nTargetTables = taosArrayGetSize(pMetaData->pTableHash);
+  int32_t      nTargetTables = taosArrayGetSize(pStmt->pInsertTables);
   for (int32_t i = 0; TSDB_CODE_SUCCESS == code && i < nTargetTables; ++i) {
-    code = getMetaData(pMetaData->pTableHash, i, (void**)&pVg);
+    code = getMetaData(pMetaData->pTableMeta, i, (void**)&pMeta);
     if (TSDB_CODE_SUCCESS == code) {
-      code = analyseAllDataOfOneTable(pCxt, pMetaData, pStmt, pVg, (SArray*)taosArrayGetP(pStmt->pTableVgroupPos, i));
+      code = getMetaData(pMetaData->pTableHash, i, (void**)&pVg);
+    }
+    if (TSDB_CODE_SUCCESS == code) {
+      code = analyseDataOfOneClause(pCxt, pMeta, pVg, (SInsertTableClause*)taosArrayGet(pStmt->pInsertTables, i));
     }
   }
   return code;

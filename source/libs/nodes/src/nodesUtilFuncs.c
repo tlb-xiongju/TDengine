@@ -234,6 +234,10 @@ SNode* nodesMakeNode(ENodeType type) {
       return makeNode(type, sizeof(SDeleteStmt));
     case QUERY_NODE_INSERT_STMT:
       return makeNode(type, sizeof(SInsertStmt));
+    case QUERY_NODE_INSERT_TABLE_CLAUSE:
+      return makeNode(type, sizeof(SInsertTableClause));
+    case QUERY_NODE_INSERT_VALUES_STMT:
+      return makeNode(type, sizeof(SInsertValuesStmt));
     case QUERY_NODE_QUERY:
       return makeNode(type, sizeof(SQuery));
     case QUERY_NODE_LOGIC_PLAN_SCAN:

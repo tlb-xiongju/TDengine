@@ -179,6 +179,8 @@ const char* nodesNodeName(ENodeType type) {
       return "DeleteStmt";
     case QUERY_NODE_INSERT_STMT:
       return "InsertStmt";
+    case QUERY_NODE_INSERT_VALUES_STMT:
+      return "InsertValuesStmt";
     case QUERY_NODE_LOGIC_PLAN_SCAN:
       return "LogicScan";
     case QUERY_NODE_LOGIC_PLAN_JOIN:
@@ -4388,6 +4390,7 @@ static int32_t specificNodeToJson(const void* pObj, SJson* pJson) {
     case QUERY_NODE_SELECT_STMT:
       return selectStmtToJson(pObj, pJson);
     case QUERY_NODE_VNODE_MODIF_STMT:
+      return TSDB_CODE_SUCCESS;  // todo
     case QUERY_NODE_CREATE_DATABASE_STMT:
       break;
     case QUERY_NODE_ALTER_DATABASE_STMT:
@@ -4408,6 +4411,8 @@ static int32_t specificNodeToJson(const void* pObj, SJson* pJson) {
       return createTopicStmtToJson(pObj, pJson);
     case QUERY_NODE_DELETE_STMT:
       return deleteStmtToJson(pObj, pJson);
+    case QUERY_NODE_INSERT_VALUES_STMT:
+      return TSDB_CODE_SUCCESS;  // todo
     case QUERY_NODE_LOGIC_PLAN_SCAN:
       return logicScanNodeToJson(pObj, pJson);
     case QUERY_NODE_LOGIC_PLAN_JOIN:

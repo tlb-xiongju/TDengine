@@ -2556,10 +2556,14 @@ typedef struct {
   char    topic[TSDB_TOPIC_FNAME_LEN];
   int64_t ntbUid;
   SArray* colIdList;  // SArray<int16_t>
-} SCheckAlterInfo;
+} STqCheckInfo;
 
-int32_t tEncodeSCheckAlterInfo(SEncoder* pEncoder, const SCheckAlterInfo* pInfo);
-int32_t tDecodeSCheckAlterInfo(SDecoder* pDecoder, SCheckAlterInfo* pInfo);
+int32_t tEncodeSTqCheckInfo(SEncoder* pEncoder, const STqCheckInfo* pInfo);
+int32_t tDecodeSTqCheckInfo(SDecoder* pDecoder, STqCheckInfo* pInfo);
+
+typedef struct {
+  char topic[TSDB_TOPIC_FNAME_LEN];
+} STqDelCheckInfoReq;
 
 typedef struct {
   int32_t vgId;
@@ -2661,29 +2665,8 @@ typedef struct {
 } SVgEpSet;
 
 typedef struct {
-  int64_t suid;
-  int8_t  level;
-} SRSmaFetchMsg;
-
-static FORCE_INLINE int32_t tEncodeSRSmaFetchMsg(SEncoder* pCoder, const SRSmaFetchMsg* pReq) {
-  if (tStartEncode(pCoder) < 0) return -1;
-
-  if (tEncodeI64(pCoder, pReq->suid) < 0) return -1;
-  if (tEncodeI8(pCoder, pReq->level) < 0) return -1;
-
-  tEndEncode(pCoder);
-  return 0;
-}
-
-static FORCE_INLINE int32_t tDecodeSRSmaFetchMsg(SDecoder* pCoder, SRSmaFetchMsg* pReq) {
-  if (tStartDecode(pCoder) < 0) return -1;
-
-  if (tDecodeI64(pCoder, &pReq->suid) < 0) return -1;
-  if (tDecodeI8(pCoder, &pReq->level) < 0) return -1;
-
-  tEndDecode(pCoder);
-  return 0;
-}
+  int32_t padding;
+} SRSmaExecMsg;
 
 typedef struct {
   int8_t         version;       // for compatibility(default 0)

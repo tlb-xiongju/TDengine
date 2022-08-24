@@ -22,6 +22,7 @@ extern "C" {
 
 #include "catalog.h"
 #include "os.h"
+#include "parToken.h"
 #include "parser.h"
 #include "query.h"
 
@@ -119,6 +120,9 @@ STableMeta*   tableMetaDup(const STableMeta* pTableMeta);
 int32_t trimString(const char* src, int32_t len, char* dst, int32_t dlen);
 
 int32_t skipInsertInto(char** pSql, SMsgBuf* pMsg);
+int32_t checkAndTrimValue(SToken* pToken, char* tmpTokenBuf, SMsgBuf* pMsgBuf);
+int32_t parseTime(char** end, SToken* pToken, int16_t timePrec, int64_t* time, SMsgBuf* pMsgBuf);
+bool    isNullValue(int8_t dataType, SToken* pToken);
 
 int32_t buildCatalogReq(SParseContext* pCxt, const SParseMetaCache* pMetaCache, SCatalogReq* pCatalogReq);
 int32_t putMetaDataToCache(const SCatalogReq* pCatalogReq, const SMetaData* pMetaData, SParseMetaCache* pMetaCache,

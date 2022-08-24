@@ -38,6 +38,7 @@ typedef struct SVariant {
 
 int32_t toInteger(const char *z, int32_t n, int32_t base, int64_t *value);
 int32_t toUInteger(const char *z, int32_t n, int32_t base, uint64_t *value);
+int32_t toDouble(const char *z, int32_t n, double *value);
 
 bool taosVariantIsValid(SVariant *pVar);
 

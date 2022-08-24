@@ -331,25 +331,34 @@ typedef struct SSqlStr {
   const char* z;
 } SSqlStr;
 
-typedef struct SInsertTableClause {
-  ENodeType type;  // QUERY_NODE_INSERT_TABLE_CLAUSE
-  SSqlStr   targetDb;
-  SSqlStr   targetTable;
-  SSqlStr   usignDb;
-  SSqlStr   usignStable;
-  SArray*   pTags;       // element is SSqlStr
-  SArray*   pTagValues;  // element is STagVal
-  SArray*   pCols;       // element is SSqlStr
-  SArray*   pRows;       // element is SArray<SColVal>
+typedef struct SInsertTableDataClause {
+  ENodeType type;   // QUERY_NODE_INSERT_TABLE_DATA_CLAUSE
+  SArray*   pCols;  // element is SSqlStr
+  SArray*   pRows;  // element is SArray<SColVal>
   SSqlStr   file;
+} SInsertTableDataClause;
+
+typedef struct SInsertTableClause {
+  ENodeType      type;  // QUERY_NODE_INSERT_TABLE_CLAUSE
+  SSqlStr        targetDb;
+  SSqlStr        targetTable;
+  SSqlStr        usignDb;
+  SSqlStr        usignStable;
+  SArray*        pTags;       // element is SSqlStr
+  SArray*        pTagValues;  // element is STagVal
+  SNodeList*     pData;       // SInsertTableDataClause
+  SArray*        pCols;       // element is SSqlStr
+  SArray*        pRows;       // element is SArray<SColVal>
+  SSqlStr        file;
+  SVCreateTbReq* pCreateReq;
 } SInsertTableClause;
 
 typedef struct SInsertValuesStmt {
   ENodeType type;           // QUERY_NODE_INSERT_VALUES_STMT
   SArray*   pInsertTables;  // element is SInsertTableClause*
   int32_t   autoCreateTableNum;
-  SArray*   pTableMetaPos;    // sql table pos => catalog data pos
-  SArray*   pTableVgroupPos;  // catalog data pos => sql table pos list
+  SArray*   pTableMetaPos;    // pInsertTables index => SMetaData::pTableMeta index
+  SArray*   pTableVgroupPos;  // pInsertTables index => SMetaData::pTableHash index
 } SInsertValuesStmt;
 
 typedef enum {

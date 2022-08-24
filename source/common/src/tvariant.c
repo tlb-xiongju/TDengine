@@ -67,6 +67,19 @@ int32_t toUInteger(const char *z, int32_t n, int32_t base, uint64_t *value) {
   return 0;
 }
 
+int32_t toDouble(const char *z, int32_t n, double *value) {
+  errno = 0;
+  char *endPtr = NULL;
+  *value = taosStr2Double(z, &endPtr);
+
+  // not a valid integer number, return error
+  if (endPtr - z != n) {
+    return -1;
+  }
+
+  return 0;
+}
+
 /**
  * create SVariant from binary string, not ascii data
  * @param pVar
@@ -155,8 +168,8 @@ void taosVariantCreateFromBinary(SVariant *pVar, const char *pz, size_t len, uin
 void taosVariantDestroy(SVariant *pVar) {
   if (pVar == NULL) return;
 
-  if (pVar->nType == TSDB_DATA_TYPE_BINARY || pVar->nType == TSDB_DATA_TYPE_NCHAR
-     || pVar->nType == TSDB_DATA_TYPE_JSON) {
+  if (pVar->nType == TSDB_DATA_TYPE_BINARY || pVar->nType == TSDB_DATA_TYPE_NCHAR ||
+      pVar->nType == TSDB_DATA_TYPE_JSON) {
     taosMemoryFreeClear(pVar->pz);
     pVar->nLen = 0;
   }
@@ -185,8 +198,8 @@ void taosVariantAssign(SVariant *pDst, const SVariant *pSrc) {
   if (pSrc == NULL || pDst == NULL) return;
 
   pDst->nType = pSrc->nType;
-  if (pSrc->nType == TSDB_DATA_TYPE_BINARY || pSrc->nType == TSDB_DATA_TYPE_NCHAR
-      || pSrc->nType == TSDB_DATA_TYPE_JSON) {
+  if (pSrc->nType == TSDB_DATA_TYPE_BINARY || pSrc->nType == TSDB_DATA_TYPE_NCHAR ||
+      pSrc->nType == TSDB_DATA_TYPE_JSON) {
     int32_t len = pSrc->nLen + TSDB_NCHAR_SIZE;
     char   *p = taosMemoryRealloc(pDst->pz, len);
     assert(p);

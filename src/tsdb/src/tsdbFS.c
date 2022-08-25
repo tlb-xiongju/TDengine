@@ -792,7 +792,7 @@ int tsdbLoadMetaCache(STsdbRepo *pRepo, bool recoverMeta) {
   int32_t   dels = 0;
   SKVRecord lastInfo;
 
-  taosHashEmpty(pfs->metaCache);
+  taosHashClear(pfs->metaCache);
 
   // No meta file, just return
   if (pfs->cstatus->pmf == NULL) return 0;

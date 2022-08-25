@@ -15,6 +15,7 @@
 
 #include <gtest/gtest.h>
 
+#include "mockCatalog.h"
 #include "parTestUtil.h"
 
 using namespace std;
@@ -84,15 +85,35 @@ TEST_F(ParserInsertTest, autoCreateTableTest) {
       "st1s2 (ts, c1, c2) USING st1 TAGS(2, 'abc', now) VALUES (now+1s, 2, 'shanghai')");
 }
 
-TEST_F(ParserInsertTest, longSql) {
+TEST_F(ParserInsertTest, performance) {
   useDb("root", "test");
+
+  const int32_t subTableNum = 4000;
+  const int32_t insertRows = 8000;
+  const int32_t interlaceRows = insertRows / subTableNum;
+
+  g_mockCatalogService->createTableBuilder("test", "st10", TSDB_SUPER_TABLE, 5, 1)
+      .setPrecision(TSDB_TIME_PRECISION_MILLI)
+      .addColumn("ts", TSDB_DATA_TYPE_TIMESTAMP)
+      .addColumn("c1", TSDB_DATA_TYPE_INT)
+      .addColumn("c2", TSDB_DATA_TYPE_INT)
+      .addColumn("c3", TSDB_DATA_TYPE_INT)
+      .addColumn("c4", TSDB_DATA_TYPE_INT)
+      .addTag("tag1", TSDB_DATA_TYPE_INT)
+      .done();
+  for (int32_t i = 1; i <= subTableNum; ++i) {
+    g_mockCatalogService->createSubTable("test", "st10", "st1s" + to_string(i), 1);
+  }
 
   int32_t sqlCount = 1000;
   while (sqlCount--) {
-    string sql("INSERT INTO t1 VALUES ");
-    for (int32_t i = 0; i < 10000; ++i) {
-      sql.append("(now+" + to_string(i) + "s, " + to_string(i) + ", 'beijing', " + to_string(i + 1) + ", " +
-                 to_string(i + 2) + ", " + to_string(i + 3) + ")");
+    string sql("INSERT INTO ");
+    for (int32_t i = 1; i <= subTableNum; ++i) {
+      sql.append("st1s" + to_string(i) + " VALUES ");
+      for (int32_t j = 0; j < interlaceRows; ++j) {
+        sql.append("(now+" + to_string(j) + "s, " + to_string(j) + ", " + to_string(j + 1) + ", " + to_string(j + 2) +
+                   ", " + to_string(j + 3) + ") ");
+      }
     }
     run(sql);
   }

@@ -162,7 +162,7 @@ static int32_t parseRowSyntax(SInsertParseSyntaxCxt* pCxt, SToken* pToken, SInse
 
   SToken nextToken;
   while (1) {
-    NEXT_TOKEN_WITH_PREV(pCxt->pSql, *pToken);
+    NEXT_VALID_TOKEN(pCxt->pSql, *pToken);
     if (0 == pToken->n) {
       return buildSyntaxErrMsg(&pCxt->msg, ") expected", NULL);
     }
@@ -171,7 +171,7 @@ static int32_t parseRowSyntax(SInsertParseSyntaxCxt* pCxt, SToken* pToken, SInse
     }
 
     do {
-      NEXT_TOKEN(pCxt->pSql, nextToken);
+      NEXT_VALID_TOKEN(pCxt->pSql, nextToken);
       if (0 == nextToken.n) {
         return buildSyntaxErrMsg(&pCxt->msg, ") expected", NULL);
       }
@@ -181,7 +181,7 @@ static int32_t parseRowSyntax(SInsertParseSyntaxCxt* pCxt, SToken* pToken, SInse
       pToken->n += nextToken.n;
     } while (1);
 
-    SColVal val = {.value.pData = pToken->z, .value.nData = pToken->n};
+    SColVal val = {.cid = pToken->type, .value.pData = pToken->z, .value.nData = pToken->n};
     taosArrayPush(pRow, &val);
 
     if (TK_NK_RP == nextToken.type) {
@@ -307,9 +307,9 @@ static void destoryDbHash(SHashObj* pDbHash) {
 
 static int32_t assignTableMetaSet(SHashObj* pDbHash, const char* pKey, int32_t keyLen, int32_t acctId,
                                   int32_t estimatedTableNum, STableMetaSet** pOutput) {
-  STableMetaSet* pSet = taosHashGet(pDbHash, pKey, keyLen);
-  if (NULL == pSet) {
-    pSet = taosMemoryMalloc(sizeof(STableMetaSet));
+  void* p = taosHashGet(pDbHash, pKey, keyLen);
+  if (NULL == p) {
+    STableMetaSet* pSet = taosMemoryMalloc(sizeof(STableMetaSet));
     if (NULL == pSet) {
       return TSDB_CODE_OUT_OF_MEMORY;
     }
@@ -325,8 +325,10 @@ static int32_t assignTableMetaSet(SHashObj* pDbHash, const char* pKey, int32_t k
     }
 
     taosHashPut(pDbHash, pKey, keyLen, &pSet, POINTER_BYTES);
+    *pOutput = pSet;
+  } else {
+    *pOutput = *(STableMetaSet**)p;
   }
-  *pOutput = pSet;
   return TSDB_CODE_SUCCESS;
 }
 
@@ -383,11 +385,13 @@ static int32_t buildTablesReq(int32_t acctId, const char* pDbName, SHashObj* pTa
 
   SName name = {.type = TSDB_TABLE_NAME_T, .acctId = acctId};
   strcpy(name.dbname, pDbName);
+  name.dbname[strlen(pDbName)] = '\0';
   void* p = taosHashIterate(pTable, NULL);
   while (NULL != p) {
     size_t      keyLen = 0;
     const char* pKey = taosHashGetKey(p, &keyLen);
     strncpy(name.tname, pKey, keyLen);
+    name.tname[keyLen] = '\0';
     taosArrayPush(req.pTables, &name);
     SArray* pTablesPos = *(SArray**)p;
     int32_t nTargetTables = taosArrayGetSize(pTablesPos);
@@ -563,17 +567,11 @@ static int32_t findCol(const char* pColname, int32_t len, int32_t start, int32_t
   return -1;
 }
 
-static int32_t analyseColVal(SInsertAnalyseSemanticCxt* pCxt, uint8_t precision, const SSchema* pSchema,
-                             SColVal* pColVal) {
-  SToken  token = {.type = pColVal->type, .n = pColVal->value.nData, .z = pColVal->value.pData};
-  int32_t code = checkAndTrimValue(&token, pCxt->tmpTokenBuf, &pCxt->msg);
-  if (code != TSDB_CODE_SUCCESS) {
-    return code;
-  }
-
-  if (isNullValue(pSchema->type, &token)) {
+static int32_t analyseColValImpl(SInsertAnalyseSemanticCxt* pCxt, uint8_t precision, const SSchema* pSchema,
+                                 SToken* pToken, SColVal* pColVal) {
+  if (isNullValue(pSchema->type, pToken)) {
     if (TSDB_DATA_TYPE_TIMESTAMP == pSchema->type && PRIMARYKEY_TIMESTAMP_COL_ID == pSchema->colId) {
-      return buildSyntaxErrMsg(&pCxt->msg, "primary timestamp should not be null", token.z);
+      return buildSyntaxErrMsg(&pCxt->msg, "primary timestamp should not be null", pToken->z);
     }
     pColVal->isNull = true;
     return TSDB_CODE_SUCCESS;
@@ -581,118 +579,118 @@ static int32_t analyseColVal(SInsertAnalyseSemanticCxt* pCxt, uint8_t precision,
 
   switch (pSchema->type) {
     case TSDB_DATA_TYPE_BOOL: {
-      if ((token.type == TK_NK_BOOL || token.type == TK_NK_STRING) && (token.n != 0)) {
-        if (strncmp(token.z, "true", token.n) == 0) {
+      if ((pToken->type == TK_NK_BOOL || pToken->type == TK_NK_STRING) && (pToken->n != 0)) {
+        if (strncmp(pToken->z, "true", pToken->n) == 0) {
           pColVal->value.i8 = TSDB_TRUE;
-        } else if (strncmp(token.z, "false", token.n) == 0) {
+        } else if (strncmp(pToken->z, "false", pToken->n) == 0) {
           pColVal->value.i8 = TSDB_FALSE;
         } else {
-          return buildSyntaxErrMsg(&pCxt->msg, "invalid bool data", token.z);
+          return buildSyntaxErrMsg(&pCxt->msg, "invalid bool data", pToken->z);
         }
-      } else if (token.type == TK_NK_INTEGER) {
-        pColVal->value.i8 = (taosStr2Int64(token.z, NULL, 10) == 0) ? TSDB_FALSE : TSDB_TRUE;
-      } else if (token.type == TK_NK_FLOAT) {
-        pColVal->value.i8 = (taosStr2Double(token.z, NULL) == 0) ? TSDB_FALSE : TSDB_TRUE;
+      } else if (pToken->type == TK_NK_INTEGER) {
+        pColVal->value.i8 = (taosStr2Int64(pToken->z, NULL, 10) == 0) ? TSDB_FALSE : TSDB_TRUE;
+      } else if (pToken->type == TK_NK_FLOAT) {
+        pColVal->value.i8 = (taosStr2Double(pToken->z, NULL) == 0) ? TSDB_FALSE : TSDB_TRUE;
       } else {
-        return buildSyntaxErrMsg(&pCxt->msg, "invalid bool data", token.z);
+        return buildSyntaxErrMsg(&pCxt->msg, "invalid bool data", pToken->z);
       }
       break;
     }
     case TSDB_DATA_TYPE_TINYINT: {
-      if (TSDB_CODE_SUCCESS != toInteger(token.z, token.n, 10, &pColVal->value.i64)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "invalid tinyint data", token.z);
+      if (TSDB_CODE_SUCCESS != toInteger(pToken->z, pToken->n, 10, &pColVal->value.i64)) {
+        return buildSyntaxErrMsg(&pCxt->msg, "invalid tinyint data", pToken->z);
       } else if (!IS_VALID_TINYINT(pColVal->value.i64)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "tinyint data overflow", token.z);
+        return buildSyntaxErrMsg(&pCxt->msg, "tinyint data overflow", pToken->z);
       }
       pColVal->value.i8 = pColVal->value.i64;
       break;
     }
     case TSDB_DATA_TYPE_UTINYINT: {
-      if (TSDB_CODE_SUCCESS != toUInteger(token.z, token.n, 10, &pColVal->value.u64)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "invalid unsigned tinyint data", token.z);
+      if (TSDB_CODE_SUCCESS != toUInteger(pToken->z, pToken->n, 10, &pColVal->value.u64)) {
+        return buildSyntaxErrMsg(&pCxt->msg, "invalid unsigned tinyint data", pToken->z);
       } else if (!IS_VALID_UTINYINT(pColVal->value.u64)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "unsigned tinyint data overflow", token.z);
+        return buildSyntaxErrMsg(&pCxt->msg, "unsigned tinyint data overflow", pToken->z);
       }
       pColVal->value.u8 = pColVal->value.u64;
       break;
     }
     case TSDB_DATA_TYPE_SMALLINT: {
-      if (TSDB_CODE_SUCCESS != toInteger(token.z, token.n, 10, &pColVal->value.i64)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "invalid smallint data", token.z);
+      if (TSDB_CODE_SUCCESS != toInteger(pToken->z, pToken->n, 10, &pColVal->value.i64)) {
+        return buildSyntaxErrMsg(&pCxt->msg, "invalid smallint data", pToken->z);
       } else if (!IS_VALID_SMALLINT(pColVal->value.i64)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "smallint data overflow", token.z);
+        return buildSyntaxErrMsg(&pCxt->msg, "smallint data overflow", pToken->z);
       }
       pColVal->value.i16 = pColVal->value.i64;
       break;
     }
     case TSDB_DATA_TYPE_USMALLINT: {
-      if (TSDB_CODE_SUCCESS != toUInteger(token.z, token.n, 10, &pColVal->value.u64)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "invalid unsigned smallint data", token.z);
+      if (TSDB_CODE_SUCCESS != toUInteger(pToken->z, pToken->n, 10, &pColVal->value.u64)) {
+        return buildSyntaxErrMsg(&pCxt->msg, "invalid unsigned smallint data", pToken->z);
       } else if (!IS_VALID_USMALLINT(pColVal->value.u64)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "unsigned smallint data overflow", token.z);
+        return buildSyntaxErrMsg(&pCxt->msg, "unsigned smallint data overflow", pToken->z);
       }
       pColVal->value.u16 = pColVal->value.u64;
       break;
     }
     case TSDB_DATA_TYPE_INT: {
-      if (TSDB_CODE_SUCCESS != toInteger(token.z, token.n, 10, &pColVal->value.i64)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "invalid int data", token.z);
+      if (TSDB_CODE_SUCCESS != toInteger(pToken->z, pToken->n, 10, &pColVal->value.i64)) {
+        return buildSyntaxErrMsg(&pCxt->msg, "invalid int data", pToken->z);
       } else if (!IS_VALID_INT(pColVal->value.i64)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "int data overflow", token.z);
+        return buildSyntaxErrMsg(&pCxt->msg, "int data overflow", pToken->z);
       }
       pColVal->value.i32 = pColVal->value.i64;
       break;
     }
     case TSDB_DATA_TYPE_UINT: {
-      if (TSDB_CODE_SUCCESS != toUInteger(token.z, token.n, 10, &pColVal->value.u64)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "invalid unsigned int data", token.z);
+      if (TSDB_CODE_SUCCESS != toUInteger(pToken->z, pToken->n, 10, &pColVal->value.u64)) {
+        return buildSyntaxErrMsg(&pCxt->msg, "invalid unsigned int data", pToken->z);
       } else if (!IS_VALID_UINT(pColVal->value.u64)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "unsigned int data overflow", token.z);
+        return buildSyntaxErrMsg(&pCxt->msg, "unsigned int data overflow", pToken->z);
       }
       pColVal->value.u32 = pColVal->value.u64;
       break;
     }
     case TSDB_DATA_TYPE_BIGINT: {
-      if (TSDB_CODE_SUCCESS != toInteger(token.z, token.n, 10, &pColVal->value.i64)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "invalid bigint data", token.z);
+      if (TSDB_CODE_SUCCESS != toInteger(pToken->z, pToken->n, 10, &pColVal->value.i64)) {
+        return buildSyntaxErrMsg(&pCxt->msg, "invalid bigint data", pToken->z);
       } else if (!IS_VALID_BIGINT(pColVal->value.i64)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "bigint data overflow", token.z);
+        return buildSyntaxErrMsg(&pCxt->msg, "bigint data overflow", pToken->z);
       }
       break;
     }
     case TSDB_DATA_TYPE_UBIGINT: {
-      if (TSDB_CODE_SUCCESS != toUInteger(token.z, token.n, 10, &pColVal->value.u64)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "invalid unsigned bigint data", token.z);
+      if (TSDB_CODE_SUCCESS != toUInteger(pToken->z, pToken->n, 10, &pColVal->value.u64)) {
+        return buildSyntaxErrMsg(&pCxt->msg, "invalid unsigned bigint data", pToken->z);
       } else if (!IS_VALID_UBIGINT(pColVal->value.u64)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "unsigned bigint data overflow", token.z);
+        return buildSyntaxErrMsg(&pCxt->msg, "unsigned bigint data overflow", pToken->z);
       }
       break;
     }
     case TSDB_DATA_TYPE_FLOAT: {
-      if (TSDB_CODE_SUCCESS != toDouble(token.z, token.n, &pColVal->value.d)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "illegal float data", token.z);
+      if (TSDB_CODE_SUCCESS != toDouble(pToken->z, pToken->n, &pColVal->value.d)) {
+        return buildSyntaxErrMsg(&pCxt->msg, "illegal float data", pToken->z);
       }
       if (((pColVal->value.d == HUGE_VAL || pColVal->value.d == -HUGE_VAL) && errno == ERANGE) ||
           pColVal->value.d > FLT_MAX || pColVal->value.d < -FLT_MAX || isinf(pColVal->value.d) ||
           isnan(pColVal->value.d)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "illegal float data", token.z);
+        return buildSyntaxErrMsg(&pCxt->msg, "illegal float data", pToken->z);
       }
       pColVal->value.f = pColVal->value.d;
       break;
     }
     case TSDB_DATA_TYPE_DOUBLE: {
-      if (TSDB_CODE_SUCCESS != toDouble(token.z, token.n, &pColVal->value.d)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "illegal double data", token.z);
+      if (TSDB_CODE_SUCCESS != toDouble(pToken->z, pToken->n, &pColVal->value.d)) {
+        return buildSyntaxErrMsg(&pCxt->msg, "illegal double data", pToken->z);
       }
       if (((pColVal->value.d == HUGE_VAL || pColVal->value.d == -HUGE_VAL) && errno == ERANGE) ||
           isinf(pColVal->value.d) || isnan(pColVal->value.d)) {
-        return buildSyntaxErrMsg(&pCxt->msg, "illegal double data", token.z);
+        return buildSyntaxErrMsg(&pCxt->msg, "illegal double data", pToken->z);
       }
       break;
     }
     case TSDB_DATA_TYPE_BINARY: {
       // Too long values will raise the invalid sql error message
-      if (token.n + VARSTR_HEADER_SIZE > pSchema->bytes) {
+      if (pToken->n + VARSTR_HEADER_SIZE > pSchema->bytes) {
         return generateSyntaxErrMsg(&pCxt->msg, TSDB_CODE_PAR_VALUE_TOO_LONG, pSchema->name);
       }
       break;
@@ -701,24 +699,34 @@ static int32_t analyseColVal(SInsertAnalyseSemanticCxt* pCxt, uint8_t precision,
       break;  // todo
     }
     case TSDB_DATA_TYPE_JSON: {
-      if (token.n > (TSDB_MAX_JSON_TAG_LEN - VARSTR_HEADER_SIZE) / TSDB_NCHAR_SIZE) {
-        return buildSyntaxErrMsg(&pCxt->msg, "json string too long than 4095", token.z);
+      if (pToken->n > (TSDB_MAX_JSON_TAG_LEN - VARSTR_HEADER_SIZE) / TSDB_NCHAR_SIZE) {
+        return buildSyntaxErrMsg(&pCxt->msg, "json string too long than 4095", pToken->z);
       }
       break;  // todo
     }
     case TSDB_DATA_TYPE_TIMESTAMP: {
       char* pStr = pColVal->value.pData;
-      if (parseTime(&pStr, &token, precision, &pColVal->value.ts, &pCxt->msg) != TSDB_CODE_SUCCESS) {
-        return buildSyntaxErrMsg(&pCxt->msg, "invalid timestamp", token.z);
+      if (parseTime(&pStr, pToken, precision, &pColVal->value.ts, &pCxt->msg) != TSDB_CODE_SUCCESS) {
+        return buildSyntaxErrMsg(&pCxt->msg, "invalid timestamp", pToken->z);
       }
       break;
     }
   }
-
-  pColVal->cid = pSchema->colId;
-  pColVal->type = pSchema->type;
-
   return TSDB_CODE_SUCCESS;
+}
+
+static int32_t analyseColVal(SInsertAnalyseSemanticCxt* pCxt, uint8_t precision, const SSchema* pSchema,
+                             SColVal* pColVal) {
+  SToken  token = {.type = pColVal->cid, .n = pColVal->value.nData, .z = pColVal->value.pData};
+  int32_t code = checkAndTrimValue(&token, pCxt->tmpTokenBuf, &pCxt->msg);
+  if (TSDB_CODE_SUCCESS == code) {
+    code = analyseColValImpl(pCxt, precision, pSchema, &token, pColVal);
+  }
+  if (TSDB_CODE_SUCCESS == code) {
+    pColVal->cid = pSchema->colId;
+    pColVal->type = pSchema->type;
+  }
+  return code;
 }
 
 static int32_t analyseRow(SInsertAnalyseSemanticCxt* pCxt, const STableMeta* pMeta, SArray* pRow, SArray* pRowSchema) {
@@ -843,8 +851,18 @@ static int32_t assignInsertBlocks(SHashObj* pHash, const char* pKey, int32_t key
 }
 
 static int32_t buildRowsMsg(SInsertTableClause* pClause, SInsertDataBlocks* pBlocks) {
-  // todo
-  return TSDB_CODE_SUCCESS;
+  int32_t code = TSDB_CODE_SUCCESS;
+  int32_t nRows = taosArrayGetSize(pClause->pRows);
+  for (int32_t i = 0; TSDB_CODE_SUCCESS == code && i < nRows; ++i) {
+    STSRow2* pRow = (STSRow2*)(pBlocks->pData + pBlocks->size);
+    code = tTSRowNew(NULL, (SArray*)taosArrayGetP(pClause->pRows, i), NULL, &pRow);
+    if (TSDB_CODE_SUCCESS == code) {
+      int32_t rLen = 0;
+      TSROW_LEN(pRow, rLen);
+      pBlocks->size += rLen;
+    }
+  }
+  return code;
 }
 
 static int32_t buildMemoryRow(SInsertAnalyseSemanticCxt* pCxt, SVgroupInfo* pVg, SInsertTableClause* pClause) {
@@ -884,7 +902,7 @@ static int32_t analyseInsertData(SInsertAnalyseSemanticCxt* pCxt, const SCatalog
       code = getMetaData(pMetaData->pTableHash, *(int32_t*)taosArrayGet(pStmt->pTableVgroupPos, i), (void**)&pVg);
     }
     if (TSDB_CODE_SUCCESS == code) {
-      code = analyseDataOfOneClause(pCxt, pMeta, pVg, (SInsertTableClause*)taosArrayGet(pStmt->pInsertTables, i));
+      code = analyseDataOfOneClause(pCxt, pMeta, pVg, (SInsertTableClause*)taosArrayGetP(pStmt->pInsertTables, i));
     }
   }
   return code;

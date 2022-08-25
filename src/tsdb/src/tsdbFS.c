@@ -705,6 +705,11 @@ int tsdbLoadMetaCache(STsdbRepo *pRepo, bool recoverMeta) {
   int64_t   maxBufSize = 0;
   SMFInfo   minfo;
 
+  int64_t   foffset = 0;
+  int32_t   rows = 0;
+  int32_t   dels = 0;
+  SKVRecord lastInfo;
+
   taosHashEmpty(pfs->metaCache);
 
   // No meta file, just return
@@ -720,10 +725,12 @@ int tsdbLoadMetaCache(STsdbRepo *pRepo, bool recoverMeta) {
     tsdbCloseMFile(pMFile);
     return -1;
   }
+  foffset = TSDB_FILE_HEAD_SIZE;
 
   while (true) {
     int64_t tsize = tsdbReadMFile(pMFile, tbuf, sizeof(SKVRecord));
     if (tsize == 0) break;
+    foffset += tsize;
 
     if (tsize < 0) {
       tsdbError("vgId:%d failed to read META file since %s", REPO_ID(pRepo), tstrerror(terrno));
@@ -742,8 +749,64 @@ int tsdbLoadMetaCache(STsdbRepo *pRepo, bool recoverMeta) {
     ASSERT(POINTER_DISTANCE(ptr, tbuf) == sizeof(SKVRecord));
     // ASSERT((rInfo.offset > 0) ? (pStore->info.size == rInfo.offset) : true);
 
+    if(rInfo.uid == 0) {
+      // found error
+      char buf[4096 + 128];
+      bool found = false; // found kvrecord
+      int64_t emptybytes = 0;
+
+      while(!found) {
+        memset(buf, 0, sizeof(buf));
+        tsize = tsdbReadMFile(pMFile, buf, 4096);
+        ASSERT(tsize == 4096);
+        for(int i=0; i< 4096; i++) {
+          if(buf[i] > 0) {
+            foffset += i;
+            emptybytes += i;
+	    found = true;
+            break;
+          }
+        }
+
+	if(found)
+	   break;
+        foffset += tsize;
+        emptybytes += tsize;
+      }
+      tsdbInfo("FIXED found empty bytes =%ld foffset=%ld", emptybytes, foffset);
+
+      int errbytes = 0;
+
+      // found first KVRecord
+      while(1) {
+        // found right position
+        if (tsdbSeekMFile(pMFile, foffset, SEEK_SET) != foffset) {
+          ASSERT(false);
+        }
+
+        tsize = tsdbReadMFile(pMFile, tbuf, sizeof(SKVRecord));
+        ASSERT(tsize == sizeof(SKVRecord));
+        ptr = tsdbDecodeKVRecord(tbuf, &rInfo);
+        ASSERT(POINTER_DISTANCE(ptr, tbuf) == sizeof(SKVRecord));
+
+        // check rInfo valid 1125909403154350
+        if (rInfo.uid < 112590940315435 || rInfo.uid > 2125909403154350  || rInfo.size <=0 || rInfo.size > 10000  || rInfo.offset < -11000000 || rInfo.offset < foffset || rInfo.offset > foffset + 10000 ) {
+          // bad , move next byte
+          foffset  += 1;
+          errbytes += 1;
+          continue;
+        }
+
+        // read ok
+	foffset += tsize;
+	tsdbInfo("FIXED found next valid SKVRecord. foffset=%ld errbytes=%d uid=%ld size=%ld offset=%ld", foffset, errbytes, rInfo.uid, rInfo.size, rInfo.offset);
+        break;
+      }
+    }
+
     if (rInfo.offset < 0) {
       taosHashRemove(pfs->metaCache, (void *)(&rInfo.uid), sizeof(rInfo.uid));
+      dels++;
 #if 0
       pStore->info.size += sizeof(SKVRecord);
       pStore->info.nRecords--;
@@ -751,7 +814,9 @@ int tsdbLoadMetaCache(STsdbRepo *pRepo, bool recoverMeta) {
       pStore->info.tombSize += (rInfo.size + sizeof(SKVRecord) * 2);
 #endif
     } else {
+      rows++;
       ASSERT(rInfo.offset > 0 && rInfo.size > 0);
+      lastInfo = rInfo;
       if (taosHashPut(pfs->metaCache, (void *)(&rInfo.uid), sizeof(rInfo.uid), &rInfo, sizeof(rInfo)) < 0) {
         tsdbError("vgId:%d failed to load meta cache from file %s since OOM", REPO_ID(pRepo),
                   TSDB_FILE_FULL_NAME(pMFile));
@@ -768,6 +833,7 @@ int tsdbLoadMetaCache(STsdbRepo *pRepo, bool recoverMeta) {
         tsdbCloseMFile(pMFile);
         return -1;
       }
+      foffset += rInfo.size;
 
 #if 0
       pStore->info.size += (sizeof(SKVRecord) + rInfo.size);
@@ -775,6 +841,11 @@ int tsdbLoadMetaCache(STsdbRepo *pRepo, bool recoverMeta) {
 #endif
     }
   }
+
+  if(lastInfo.size == 9999899128) {
+    printf("build require.\n");
+  }
+  tsdbInfo("FIXED read meta KVRecord finished. rows=%d dels=%d", rows, dels);
 
   if (recoverMeta) {
     pBuf = malloc((size_t)maxBufSize);
@@ -830,6 +901,7 @@ int tsdbLoadMetaCache(STsdbRepo *pRepo, bool recoverMeta) {
   tfree(pBuf);
   return 0;
 }
+
 
 static int tsdbScanRootDir(STsdbRepo *pRepo) {
   char         rootDir[TSDB_FILENAME_LEN];
@@ -1127,8 +1199,8 @@ static int tsdbRestoreDFileSet(STsdbRepo *pRepo) {
 
       tfsbasename(pf, bname);
       tsdbParseDFilename(bname, &tvid, &tfid, &ttype, &tversion);
-
-      ASSERT(tvid == REPO_ID(pRepo));
+       
+      //ASSERT(tvid == REPO_ID(pRepo));
 
       if (ftype == 0) {
         fset.fid = tfid;

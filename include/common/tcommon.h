@@ -184,6 +184,7 @@ typedef struct SQueryTableDataCond {
   STimeWindow  twindows;
   int64_t      startVersion;
   int64_t      endVersion;
+  int64_t      schemaVersion;
 } SQueryTableDataCond;
 
 int32_t tEncodeDataBlock(void** buf, const SSDataBlock* pBlock);
@@ -205,7 +206,7 @@ typedef struct SColumn {
   int16_t slotId;
 
   char    name[TSDB_COL_NAME_LEN];
-  int8_t  flag;  // column type: normal column, tag, or user-input column (integer/float/string)
+  int16_t colType;  // column type: normal column, tag, or window column
   int16_t type;
   int32_t bytes;
   uint8_t precision;

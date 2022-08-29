@@ -1554,7 +1554,7 @@ static int32_t skipUsingClause(SInsertParseSyntaxCxt* pCxt) {
 }
 
 static int32_t collectTableMetaKey(SInsertParseSyntaxCxt* pCxt, bool isStable, int32_t tableNo, SToken* pTbToken) {
-  SName name;
+  SName name = {0};
   CHECK_CODE(createSName(&name, pTbToken, pCxt->pComCxt->acctId, pCxt->pComCxt->db, &pCxt->msg));
   CHECK_CODE(reserveTableMetaInCacheForInsert(&name, isStable ? CATALOG_REQ_TYPE_META : CATALOG_REQ_TYPE_BOTH, tableNo,
                                               pCxt->pMetaCache));
@@ -1569,7 +1569,7 @@ static int32_t checkTableName(const char* pTableName, SMsgBuf* pMsgBuf) {
 }
 
 static int32_t collectAutoCreateTableMetaKey(SInsertParseSyntaxCxt* pCxt, int32_t tableNo, SToken* pTbToken) {
-  SName name;
+  SName name = {0};
   CHECK_CODE(createSName(&name, pTbToken, pCxt->pComCxt->acctId, pCxt->pComCxt->db, &pCxt->msg));
   CHECK_CODE(checkTableName(name.tname, &pCxt->msg));
   CHECK_CODE(reserveTableMetaInCacheForInsert(&name, CATALOG_REQ_TYPE_VGROUP, tableNo, pCxt->pMetaCache));

@@ -88,8 +88,8 @@ TEST_F(ParserInsertTest, autoCreateTableTest) {
 TEST_F(ParserInsertTest, performance) {
   useDb("root", "test");
 
-  const int32_t subTableNum = 4000;
-  const int32_t insertRows = 8000;
+  const int32_t subTableNum = getInsertTablesNum();
+  const int32_t insertRows = getInsertRowsNum();
   const int32_t interlaceRows = insertRows / subTableNum;
 
   g_mockCatalogService->createTableBuilder("test", "st10", TSDB_SUPER_TABLE, 5, 1)
@@ -105,6 +105,11 @@ TEST_F(ParserInsertTest, performance) {
     g_mockCatalogService->createSubTable("test", "st10", "st1s" + to_string(i), 1);
   }
 
+  cout << "Insert test:" << endl;
+  cout << "\ttarget tables num: " << subTableNum << endl;
+  cout << "\tinsert rows num per sql: " << insertRows << endl;
+  cout << "\tinsert rows num per table: " << interlaceRows << endl;
+
   int32_t sqlCount = 1000;
   while (sqlCount--) {
     string sql("INSERT INTO ");
@@ -115,7 +120,7 @@ TEST_F(ParserInsertTest, performance) {
                    ", " + to_string(j + 3) + ") ");
       }
     }
-    run(sql);
+    runPerf(sql, true);
   }
 }
 

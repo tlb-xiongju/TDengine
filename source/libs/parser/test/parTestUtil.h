@@ -40,6 +40,7 @@ class ParserTestBase : public testing::Test {
   void login(const std::string& user);
   void useDb(const std::string& acctId, const std::string& db);
   void run(const std::string& sql, int32_t expect = TSDB_CODE_SUCCESS, ParserStage checkStage = PARSER_STAGE_TRANSLATE);
+  void runPerf(const std::string& sql, bool async);
 
   virtual void checkDdl(const SQuery* pQuery, ParserStage stage);
 
@@ -69,6 +70,10 @@ extern void    setAsyncFlag(const char* pFlag);
 extern void    setLogLevel(const char* pLogLevel);
 extern int32_t getLogLevel();
 extern void    setSkipSqlNum(const char* pNum);
+extern void    setInsertTablesNum(const char* pNum);
+extern int32_t getInsertTablesNum();
+extern void    setInsertRowsNum(const char* pNum);
+extern int32_t getInsertRowsNum();
 
 }  // namespace ParserTest
 

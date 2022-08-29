@@ -49,17 +49,21 @@ bool    g_dump = false;
 bool    g_testAsyncApis = true;
 int32_t g_logLevel = 131;
 int32_t g_skipSql = 0;
+int32_t g_insertTablesNum = 1;
+int32_t g_insertRowsNum = 8000;
 
-void setAsyncFlag(const char* pFlag) { g_testAsyncApis = stoi(pFlag) > 0 ? true : false; }
-void setSkipSqlNum(const char* pNum) { g_skipSql = stoi(pNum); }
+void    setAsyncFlag(const char* pFlag) { g_testAsyncApis = stoi(pFlag) > 0 ? true : false; }
+void    setSkipSqlNum(const char* pNum) { g_skipSql = stoi(pNum); }
+void    setLogLevel(const char* pLogLevel) { g_logLevel = stoi(pLogLevel); }
+int32_t getLogLevel() { return g_logLevel; }
+void    setInsertTablesNum(const char* pNum) { g_insertTablesNum = stoi(pNum); }
+int32_t getInsertTablesNum() { return g_insertTablesNum; }
+void    setInsertRowsNum(const char* pNum) { g_insertRowsNum = stoi(pNum); }
+int32_t getInsertRowsNum() { return g_insertRowsNum; }
 
 struct TerminateFlag : public exception {
   const char* what() const throw() { return "success and terminate"; }
 };
-
-void setLogLevel(const char* pLogLevel) { g_logLevel = stoi(pLogLevel); }
-
-int32_t getLogLevel() { return g_logLevel; }
 
 class ParserTestBaseImpl {
  public:
@@ -86,6 +90,14 @@ class ParserTestBaseImpl {
     if (g_testAsyncApis) {
       runAsyncInternalFuncs(sql, expect, checkStage);
       runAsyncApis(sql, expect, checkStage);
+    }
+  }
+
+  void runPerf(const string& sql, bool async) {
+    if (async) {
+      runAsyncApis(sql, TSDB_CODE_SUCCESS, PARSER_STAGE_TRANSLATE);
+    } else {
+      runApis(sql, TSDB_CODE_SUCCESS, PARSER_STAGE_TRANSLATE);
     }
   }
 
@@ -482,6 +494,8 @@ void ParserTestBase::useDb(const std::string& acctId, const std::string& db) { i
 void ParserTestBase::run(const std::string& sql, int32_t expect, ParserStage checkStage) {
   return impl_->run(sql, expect, checkStage);
 }
+
+void ParserTestBase::runPerf(const string& sql, bool async) { return impl_->runPerf(sql, async); }
 
 void ParserTestBase::checkDdl(const SQuery* pQuery, ParserStage stage) { return; }
 

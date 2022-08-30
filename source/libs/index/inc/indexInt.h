@@ -58,8 +58,8 @@ struct SIndex {
   void*     tindex;
   SHashObj* colObj;  // < field name, field id>
 
-  int64_t    suid;      // current super table id, -1 is normal table
-  int32_t    cVersion;  // current version allocated to cache
+  int64_t    suid;     // current super table id, -1 is normal table
+  int32_t    version;  // current version allocated to cache
   SLRUCache* lru;
   char*      path;
 

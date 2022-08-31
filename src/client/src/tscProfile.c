@@ -282,7 +282,7 @@ int tscBuildQueryStreamDesc(void *pMsg, STscObj *pObj) {
 //      }
       pthread_mutex_lock(&pSql->subState.mutex);
       if (pSql->pSubs != NULL && pSql->subState.states != NULL) {
-        for (int32_t i = 0; i < pQdesc->numOfSub; ++i) {
+        for (int32_t i = 0; i < pSql->subState.numOfSub; ++i) {
           SSqlObj *psub = pSql->pSubs[i];
           int64_t  self = (psub != NULL)? psub->self : 0;
 
@@ -295,6 +295,7 @@ int tscBuildQueryStreamDesc(void *pMsg, STscObj *pObj) {
           p += len;
         }
       }
+      pQdesc->numOfSub = pSql->subState.numOfSub;
       pthread_mutex_unlock(&pSql->subState.mutex);
     }
 

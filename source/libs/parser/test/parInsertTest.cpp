@@ -13,6 +13,8 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <chrono>
+
 #include <gtest/gtest.h>
 
 #include "mockCatalog.h"
@@ -110,18 +112,65 @@ TEST_F(ParserInsertTest, performance) {
   cout << "\tinsert rows num per sql: " << insertRows << endl;
   cout << "\tinsert rows num per table: " << interlaceRows << endl;
 
+  int64_t nowTs = chrono::system_clock::to_time_t(chrono::system_clock::now());
   int32_t sqlCount = 1000;
   while (sqlCount--) {
     string sql("INSERT INTO ");
     for (int32_t i = 1; i <= subTableNum; ++i) {
       sql.append("st1s" + to_string(i) + " VALUES ");
       for (int32_t j = 0; j < interlaceRows; ++j) {
-        sql.append("(now+" + to_string(j) + "s, " + to_string(j) + ", " + to_string(j + 1) + ", " + to_string(j + 2) +
+        sql.append("(" + to_string(nowTs++) + ", " + to_string(j) + ", " + to_string(j + 1) + ", " + to_string(j + 2) +
                    ", " + to_string(j + 3) + ") ");
       }
     }
     runPerf(sql, true);
   }
+}
+
+TEST_F(ParserInsertTest, hashPerformance) {
+  const int32_t subTableNum = getInsertTablesNum();
+
+  vector<string> tables;
+  for (int32_t i = 1; i <= subTableNum; ++i) {
+    tables.push_back("st1s" + to_string(i));
+  }
+
+  int64_t initDuration = 0;
+  int64_t getDuration = 0;
+  int64_t putDuration = 0;
+  int64_t cleanDuration = 0;
+
+  auto    testStart = chrono::steady_clock::now();
+  int32_t loopCount = 1000;
+  for (int32_t j = 0; j < loopCount; ++j) {
+    auto      start = chrono::steady_clock::now();
+    SHashObj* pHash = taosHashInit(subTableNum, taosGetDefaultHashFunction(TSDB_DATA_TYPE_BINARY), false, HASH_NO_LOCK);
+    initDuration += chrono::duration_cast<chrono::nanoseconds>(chrono::steady_clock::now() - start).count();
+
+    start = chrono::steady_clock::now();
+    for (int32_t i = 0; i < subTableNum; ++i) {
+      taosHashGet(pHash, tables[i].c_str(), tables[i].length());
+    }
+    getDuration += chrono::duration_cast<chrono::nanoseconds>(chrono::steady_clock::now() - start).count();
+
+    start = chrono::steady_clock::now();
+    for (int32_t i = 0; i < subTableNum; ++i) {
+      SArray* pArray = taosArrayInit(TARRAY_MIN_SIZE, sizeof(int32_t));
+      taosArrayPush(pArray, &i);
+      taosHashPut(pHash, tables[i].c_str(), tables[i].length(), &pArray, POINTER_BYTES);
+    }
+    putDuration += chrono::duration_cast<chrono::nanoseconds>(chrono::steady_clock::now() - start).count();
+
+    start = chrono::steady_clock::now();
+    taosHashCleanup(pHash);
+    cleanDuration += chrono::duration_cast<chrono::nanoseconds>(chrono::steady_clock::now() - start).count();
+  }
+  int64_t testDuration = chrono::duration_cast<chrono::nanoseconds>(chrono::steady_clock::now() - testStart).count();
+
+  cout << "loop: " << loopCount << "\ninit size:" << subTableNum << "\n\tduration: " << testDuration / (1000 * 1000)
+       << "ms\n\tinitDuration: " << initDuration / (1000 * 1000) << "ms\n\tgetDuration: " << getDuration / (1000 * 1000)
+       << "ms\n\tputDuration: " << putDuration / (1000 * 1000)
+       << "ms\n\tcleanDuration: " << cleanDuration / (1000 * 1000) << "ms" << endl;
 }
 
 }  // namespace ParserTest

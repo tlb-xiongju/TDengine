@@ -42,6 +42,32 @@ typedef struct SInsertDataBlocks {
   char*    pData;
 } SInsertDataBlocks;
 
+typedef struct SParseProfile {
+  double  minElapsedMs;
+  double  maxElapsedMs;
+  double  totalElapsedMs;
+  int32_t count;
+} SParseProfile;
+
+static void profileRecord(SParseProfile* pProfile, int64_t start) {
+  double elapsed = (taosGetTimestampUs() - start) / 1000.0;
+  if (elapsed < pProfile->minElapsedMs) {
+    pProfile->minElapsedMs = elapsed;
+  }
+  if (elapsed > pProfile->maxElapsedMs) {
+    pProfile->maxElapsedMs = elapsed;
+  }
+  pProfile->totalElapsedMs += elapsed;
+  ++(pProfile->count);
+}
+
+static void profileDump(const SParseProfile* pProfile, const char* pFunc) {
+  if (0 == pProfile->count % 100) {
+    printf("%-20s count: %4d, min: %6.2lfms, avg: %6.2lfms, max: %6.2lfms\n", pFunc, pProfile->count,
+           pProfile->minElapsedMs, pProfile->totalElapsedMs / pProfile->count, pProfile->maxElapsedMs);
+  }
+}
+
 // required syntax: 'TAGS (tag1_value, ...)', pToken -> 'TAGS', pSql -> '('
 static int32_t parseTagsClauseSyntax(SInsertParseSyntaxCxt* pCxt, SToken* pToken, SInsertTableClause* pClause) {
   if (TK_TAGS != pToken->type) {
@@ -349,6 +375,9 @@ static int32_t updateTableMetaKey(SHashObj* pTableHash, const char* pKey, int32_
 }
 
 static int32_t collectMetaKeyForInsertValues(SInsertParseSyntaxCxt* pCxt, SInsertValuesStmt* pStmt, SHashObj* pDbHash) {
+  static SParseProfile profile = {.minElapsedMs = 10000000, .maxElapsedMs = 0, .totalElapsedMs = 0, .count = 0};
+  int64_t              start = taosGetTimestampUs();
+
   int32_t code = TSDB_CODE_SUCCESS;
   int32_t nTargetTables = taosArrayGetSize(pStmt->pInsertTables);
   for (int32_t i = 0; TSDB_CODE_SUCCESS == code && i < nTargetTables; ++i) {
@@ -372,6 +401,10 @@ static int32_t collectMetaKeyForInsertValues(SInsertParseSyntaxCxt* pCxt, SInser
       }
     }
   }
+
+  profileRecord(&profile, start);
+  profileDump(&profile, "collectMetaKeyForInsertValues");
+
   return code;
 }
 
@@ -457,15 +490,98 @@ static int32_t setCatalogReq(SInsertParseSyntaxCxt* pCxt, SInsertValuesStmt* pSt
 
 static int32_t buildCatalogReqForInsertValues(SInsertParseSyntaxCxt* pCxt, SInsertValuesStmt* pStmt, SHashObj* pDbHash,
                                               SCatalogReq* pCatalogReq) {
+  static SParseProfile profile = {.minElapsedMs = 10000000, .maxElapsedMs = 0, .totalElapsedMs = 0, .count = 0};
+  int64_t              start = taosGetTimestampUs();
+
   int32_t code = initCatalogReq(pStmt, pDbHash, pCatalogReq);
   if (TSDB_CODE_SUCCESS == code) {
     code = setCatalogReq(pCxt, pStmt, pDbHash, pCatalogReq);
+  }
+
+  profileRecord(&profile, start);
+  profileDump(&profile, "buildCatalogReqForInsertValues");
+
+  return code;
+}
+
+static int32_t initCatalogReq2(SInsertValuesStmt* pStmt, SCatalogReq* pCatalogReq) {
+  int32_t targetTableNum = taosArrayGetSize(pStmt->pInsertTables);
+  pStmt->pTableMetaPos = taosArrayInit(targetTableNum, sizeof(int32_t));
+  pStmt->pTableVgroupPos = taosArrayInit(targetTableNum, sizeof(int32_t));
+  pCatalogReq->pTableMeta = taosArrayInit(targetTableNum, sizeof(STablesReq));
+  pCatalogReq->pTableHash = taosArrayInit(targetTableNum, sizeof(STablesReq));
+  pCatalogReq->pUser = taosArrayInit(targetTableNum, sizeof(SUserAuthInfo));
+  if (NULL == pStmt->pTableMetaPos || NULL == pStmt->pTableVgroupPos || NULL == pCatalogReq->pTableMeta ||
+      NULL == pCatalogReq->pTableHash || NULL == pCatalogReq->pUser) {
+    return TSDB_CODE_OUT_OF_MEMORY;
+  }
+  // taosArraySetSize(pStmt->pTableMetaPos, targetTableNum);
+  // taosArraySetSize(pStmt->pTableVgroupPos, targetTableNum);
+  return TSDB_CODE_SUCCESS;
+}
+
+static int32_t buildTablesReq2(SName* pName, SArray* pDbReq, SArray* pPos, int32_t reqNo) {
+  STablesReq req = {.pTables = taosArrayInit(TARRAY_MIN_SIZE, sizeof(SName))};
+  if (NULL == req.pTables) {
+    return TSDB_CODE_OUT_OF_MEMORY;
+  }
+  snprintf(req.dbFName, sizeof(req.dbFName), "%d.%s", pName->acctId, pName->dbname);
+  taosArrayPush(req.pTables, pName);
+  taosArrayPush(pDbReq, &req);
+
+  taosArrayPush(pPos, &reqNo);
+
+  return TSDB_CODE_SUCCESS;
+}
+
+static void buildName(const char* pDbName, int32_t dbLen, const char* pTableName, int32_t tableLen, SName* pName) {
+  strncpy(pName->dbname, pDbName, dbLen);
+  pName->dbname[dbLen] = '\0';
+  strncpy(pName->tname, pTableName, tableLen);
+  pName->tname[tableLen] = '\0';
+}
+
+static int32_t buildUserAuthReq2(SName* pName, SUserAuthInfo* pAuth, SArray* pAuthReq) {
+  snprintf(pAuth->dbFName, sizeof(pAuth->dbFName), "%d.%s", pName->acctId, pName->dbname);
+  taosArrayPush(pAuthReq, pAuthReq);
+  return TSDB_CODE_SUCCESS;
+}
+
+static int32_t setCatalogReq2(SInsertParseSyntaxCxt* pCxt, SInsertValuesStmt* pStmt, SCatalogReq* pCatalogReq) {
+  int32_t       code = TSDB_CODE_SUCCESS;
+  SName         name = {.type = TSDB_TABLE_NAME_T, .acctId = pCxt->pComCxt->acctId};
+  SUserAuthInfo auth = {.type = AUTH_TYPE_WRITE};
+  strcpy(auth.user, pCxt->pComCxt->pUser);
+  int32_t nTargetTables = taosArrayGetSize(pStmt->pInsertTables);
+  for (int32_t i = 0; TSDB_CODE_SUCCESS == code && i < nTargetTables; ++i) {
+    SInsertTableClause* pClause = (SInsertTableClause*)taosArrayGetP(pStmt->pInsertTables, i);
+    buildName(pClause->targetDb.z, pClause->targetDb.n, pClause->targetTable.z, pClause->targetTable.n, &name);
+    code = buildTablesReq2(&name, pCatalogReq->pTableMeta, pStmt->pTableMetaPos, i);
+    if (TSDB_CODE_SUCCESS == code) {
+      code = buildTablesReq2(&name, pCatalogReq->pTableHash, pStmt->pTableVgroupPos, i);
+    }
+    if (TSDB_CODE_SUCCESS == code) {
+      code = buildUserAuthReq2(&name, &auth, pCatalogReq->pUser);
+    }
+  }
+  return code;
+}
+
+static int32_t buildCatalogReqForInsertValues2(SInsertParseSyntaxCxt* pCxt, SInsertValuesStmt* pStmt,
+                                               SCatalogReq* pCatalogReq) {
+  int32_t code = initCatalogReq2(pStmt, pCatalogReq);
+  if (TSDB_CODE_SUCCESS == code) {
+    code = setCatalogReq2(pCxt, pStmt, pCatalogReq);
   }
   return code;
 }
 
 static int32_t checkAndbuildCatalogReq(SInsertParseSyntaxCxt* pCxt, SInsertValuesStmt* pStmt,
                                        SCatalogReq* pCatalogReq) {
+  static SParseProfile profile = {.minElapsedMs = 10000000, .maxElapsedMs = 0, .totalElapsedMs = 0, .count = 0};
+  int64_t              start = taosGetTimestampUs();
+
+#if 1
   SHashObj* pDbHash = NULL;
   int32_t   code = createDbHash(pStmt, &pDbHash);
   if (TSDB_CODE_SUCCESS == code) {
@@ -475,6 +591,13 @@ static int32_t checkAndbuildCatalogReq(SInsertParseSyntaxCxt* pCxt, SInsertValue
     code = buildCatalogReqForInsertValues(pCxt, pStmt, pDbHash, pCatalogReq);
   }
   destoryDbHash(pDbHash);
+#else
+  int32_t code = buildCatalogReqForInsertValues2(pCxt, pStmt, pCatalogReq);
+#endif
+
+  profileRecord(&profile, start);
+  profileDump(&profile, "checkAndbuildCatalogReq");
+
   return code;
 }
 

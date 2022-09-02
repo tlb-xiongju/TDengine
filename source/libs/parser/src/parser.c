@@ -168,10 +168,11 @@ typedef struct SParseProfile {
   double  minElapsedMs;
   double  maxElapsedMs;
   double  totalElapsedMs;
+  int64_t totalSqlLen;
   int32_t count;
 } SParseProfile;
 
-static void profileRecord(SParseProfile* pProfile, int64_t start) {
+static void profileRecord(SParseProfile* pProfile, int64_t start, int32_t sqlLen) {
   double elapsed = (taosGetTimestampUs() - start) / 1000.0;
   if (elapsed < pProfile->minElapsedMs) {
     pProfile->minElapsedMs = elapsed;
@@ -179,20 +180,23 @@ static void profileRecord(SParseProfile* pProfile, int64_t start) {
   if (elapsed > pProfile->maxElapsedMs) {
     pProfile->maxElapsedMs = elapsed;
   }
+  pProfile->totalSqlLen += sqlLen;
   pProfile->totalElapsedMs += elapsed;
   ++(pProfile->count);
 }
 
-static void profileDump(const SParseProfile* pProfile, const char* func) {
+static void profileDump(const SParseProfile* pProfile, const char* pFunc) {
   if (0 == pProfile->count % 100) {
-    printf("%20s count: %d, min: %5.2lfms, avg: %5.2lfms, max: %5.2lfms\n", func, pProfile->count,
-           pProfile->minElapsedMs, pProfile->totalElapsedMs / pProfile->count, pProfile->maxElapsedMs);
+    printf("%-20s count: %4d, avgSqlLen: %d, min: %6.2lfms, avg: %6.2lfms, max: %6.2lfms\n", pFunc, pProfile->count,
+           pProfile->totalSqlLen / pProfile->count, pProfile->minElapsedMs, pProfile->totalElapsedMs / pProfile->count,
+           pProfile->maxElapsedMs);
   }
 }
 
 int32_t qParseSql(SParseContext* pCxt, SQuery** pQuery) {
-  static SParseProfile profile = {.minElapsedMs = 10000000, .maxElapsedMs = 0, .totalElapsedMs = 0, .count = 0};
-  int64_t              start = taosGetTimestampUs();
+  static SParseProfile profile = {
+      .minElapsedMs = 10000000, .maxElapsedMs = 0, .totalElapsedMs = 0, .totalSqlLen = 0, .count = 0};
+  int64_t start = taosGetTimestampUs();
 
   int32_t code = TSDB_CODE_SUCCESS;
   bool    isInsertValues = qIsInsertValuesSql(pCxt->pSql, pCxt->sqlLen);
@@ -204,7 +208,7 @@ int32_t qParseSql(SParseContext* pCxt, SQuery** pQuery) {
   terrno = code;
 
   if (isInsertValues) {
-    profileRecord(&profile, start);
+    profileRecord(&profile, start, pCxt->sqlLen);
     profileDump(&profile, "qParseSql");
   }
 
@@ -212,14 +216,15 @@ int32_t qParseSql(SParseContext* pCxt, SQuery** pQuery) {
 }
 
 int32_t qParseSqlSyntax(SParseContext* pCxt, SQuery** pQuery, struct SCatalogReq* pCatalogReq) {
-  static SParseProfile profile = {.minElapsedMs = 10000000, .maxElapsedMs = 0, .totalElapsedMs = 0, .count = 0};
-  int64_t              start = taosGetTimestampUs();
+  static SParseProfile profile = {
+      .minElapsedMs = 10000000, .maxElapsedMs = 0, .totalElapsedMs = 0, .totalSqlLen = 0, .count = 0};
+  int64_t start = taosGetTimestampUs();
 
   SParseMetaCache metaCache = {0};
   int32_t         code = TSDB_CODE_SUCCESS;
   bool            isInsertValues = qIsInsertValuesSql(pCxt->pSql, pCxt->sqlLen);
 
-#if 0
+#if 1
   if (isInsertValues) {
     code = parseInsertSyntaxNew(pCxt, pQuery, pCatalogReq);
   } else {
@@ -244,7 +249,7 @@ int32_t qParseSqlSyntax(SParseContext* pCxt, SQuery** pQuery, struct SCatalogReq
   terrno = code;
 
   if (isInsertValues) {
-    profileRecord(&profile, start);
+    profileRecord(&profile, start, pCxt->sqlLen);
     profileDump(&profile, "qParseSqlSyntax");
   }
 
@@ -253,10 +258,11 @@ int32_t qParseSqlSyntax(SParseContext* pCxt, SQuery** pQuery, struct SCatalogReq
 
 int32_t qAnalyseSqlSemantic(SParseContext* pCxt, const struct SCatalogReq* pCatalogReq,
                             const struct SMetaData* pMetaData, SQuery* pQuery) {
-  static SParseProfile profile = {.minElapsedMs = 10000000, .maxElapsedMs = 0, .totalElapsedMs = 0, .count = 0};
-  int64_t              start = taosGetTimestampUs();
+  static SParseProfile profile = {
+      .minElapsedMs = 10000000, .maxElapsedMs = 0, .totalElapsedMs = 0, .totalSqlLen = 0, .count = 0};
+  int64_t start = taosGetTimestampUs();
 
-#if 0
+#if 1
   bool    isInsertValues = (QUERY_NODE_INSERT_VALUES_STMT == nodeType(pQuery->pRoot));
   int32_t code = TSDB_CODE_SUCCESS;
   if (isInsertValues) {
@@ -286,7 +292,7 @@ int32_t qAnalyseSqlSemantic(SParseContext* pCxt, const struct SCatalogReq* pCata
   terrno = code;
 
   if (isInsertValues) {
-    profileRecord(&profile, start);
+    profileRecord(&profile, start, pCxt->sqlLen);
     profileDump(&profile, "qAnalyseSqlSemantic");
   }
 

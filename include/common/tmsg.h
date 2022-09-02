@@ -785,6 +785,7 @@ typedef struct {
   int64_t walRetentionSize;
   int32_t walRollPeriod;
   int64_t walSegmentSize;
+  int32_t sstTrigger;
 } SCreateDbReq;
 
 int32_t tSerializeSCreateDbReq(void* buf, int32_t bufLen, SCreateDbReq* pReq);
@@ -806,6 +807,7 @@ typedef struct {
   int8_t  strict;
   int8_t  cacheLast;
   int8_t  replications;
+  int32_t sstTrigger;
 } SAlterDbReq;
 
 int32_t tSerializeSAlterDbReq(void* buf, int32_t bufLen, SAlterDbReq* pReq);
@@ -2070,8 +2072,9 @@ int32_t tDeserializeSVCreateTbBatchRsp(void* buf, int32_t bufLen, SVCreateTbBatc
 
 // TDMT_VND_DROP_TABLE =================
 typedef struct {
-  char*  name;
-  int8_t igNotExists;
+  char*    name;
+  uint64_t suid;  // for tmq in wal format
+  int8_t   igNotExists;
 } SVDropTbReq;
 
 typedef struct {
@@ -2627,6 +2630,22 @@ typedef struct {
   };
 } STqOffsetVal;
 
+static FORCE_INLINE void tqOffsetResetToData(STqOffsetVal* pOffsetVal, int64_t uid, int64_t ts) {
+  pOffsetVal->type = TMQ_OFFSET__SNAPSHOT_DATA;
+  pOffsetVal->uid = uid;
+  pOffsetVal->ts = ts;
+}
+
+static FORCE_INLINE void tqOffsetResetToMeta(STqOffsetVal* pOffsetVal, int64_t uid) {
+  pOffsetVal->type = TMQ_OFFSET__SNAPSHOT_META;
+  pOffsetVal->uid = uid;
+}
+
+static FORCE_INLINE void tqOffsetResetToLog(STqOffsetVal* pOffsetVal, int64_t ver) {
+  pOffsetVal->type = TMQ_OFFSET__LOG;
+  pOffsetVal->version = ver;
+}
+
 int32_t tEncodeSTqOffsetVal(SEncoder* pEncoder, const STqOffsetVal* pOffsetVal);
 int32_t tDecodeSTqOffsetVal(SDecoder* pDecoder, STqOffsetVal* pOffsetVal);
 int32_t tFormatOffset(char* buf, int32_t maxLen, const STqOffsetVal* pVal);
@@ -2958,6 +2977,7 @@ typedef struct {
 
 int32_t tEncodeSMqDataRsp(SEncoder* pEncoder, const SMqDataRsp* pRsp);
 int32_t tDecodeSMqDataRsp(SDecoder* pDecoder, SMqDataRsp* pRsp);
+void    tDeleteSMqDataRsp(SMqDataRsp* pRsp);
 
 typedef struct {
   SMqRspHead   head;
@@ -2977,6 +2997,7 @@ typedef struct {
 
 int32_t tEncodeSTaosxRsp(SEncoder* pEncoder, const STaosxRsp* pRsp);
 int32_t tDecodeSTaosxRsp(SDecoder* pDecoder, STaosxRsp* pRsp);
+void    tDeleteSTaosxRsp(STaosxRsp* pRsp);
 
 typedef struct {
   SMqRspHead head;

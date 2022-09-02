@@ -179,26 +179,23 @@ static bool chkResultRowFromKey(STaskRuntimeEnv* pRuntimeEnv, SResultRowInfo* pR
 }
 #endif
 
-SResultRow* getNewResultRow(SDiskbasedBuf* pResultBuf, int64_t tableGroupId, int32_t interBufSize) {
+SResultRow* getNewResultRow(SDiskbasedBuf* pResultBuf, int32_t* currentPageId, int32_t interBufSize) {
   SFilePage* pData = NULL;
 
   // in the first scan, new space needed for results
   int32_t pageId = -1;
-  SIDList list = getDataBufPagesIdList(pResultBuf);
-
-  if (taosArrayGetSize(list) == 0) {
-    pData = getNewBufPage(pResultBuf, tableGroupId, &pageId);
+  if (*currentPageId == -1) {
+    pData = getNewBufPage(pResultBuf, &pageId);
     pData->num = sizeof(SFilePage);
   } else {
-    SPageInfo* pi = getLastPageInfo(list);
-    pData = getBufPage(pResultBuf, getPageId(pi));
-    pageId = getPageId(pi);
+    pData = getBufPage(pResultBuf, *currentPageId);
+    pageId = *currentPageId;
 
     if (pData->num + interBufSize > getBufPageSize(pResultBuf)) {
       // release current page first, and prepare the next one
-      releaseBufPageInfo(pResultBuf, pi);
+      releaseBufPage(pResultBuf, pData);
 
-      pData = getNewBufPage(pResultBuf, tableGroupId, &pageId);
+      pData = getNewBufPage(pResultBuf, &pageId);
       if (pData != NULL) {
         pData->num = sizeof(SFilePage);
       }
@@ -215,9 +212,9 @@ SResultRow* getNewResultRow(SDiskbasedBuf* pResultBuf, int64_t tableGroupId, int
   SResultRow* pResultRow = (SResultRow*)((char*)pData + pData->num);
   pResultRow->pageId = pageId;
   pResultRow->offset = (int32_t)pData->num;
+  *currentPageId = pageId;
 
   pData->num += interBufSize;
-
   return pResultRow;
 }
 
@@ -263,18 +260,13 @@ SResultRow* doSetResultOutBufByKey(SDiskbasedBuf* pResultBuf, SResultRowInfo* pR
 
   // allocate a new buffer page
   if (pResult == NULL) {
-#ifdef BUF_PAGE_DEBUG
-    qDebug("page_2");
-#endif
     ASSERT(pSup->resultRowSize > 0);
-    pResult = getNewResultRow(pResultBuf, groupId, pSup->resultRowSize);
-
-    initResultRow(pResult);
+    pResult = getNewResultRow(pResultBuf, &pSup->currentPageId, pSup->resultRowSize);
 
     // add a new result set for a new group
     SResultRowPosition pos = {.pageId = pResult->pageId, .offset = pResult->offset};
     tSimpleHashPut(pSup->pResultRowHashTable, pSup->keyBuf, GET_RES_WINDOW_KEY_LEN(bytes), &pos,
-                sizeof(SResultRowPosition));
+                   sizeof(SResultRowPosition));
   }
 
   // 2. set the new time window to be the new active time window
@@ -302,7 +294,7 @@ static int32_t addNewWindowResultBuf(SResultRow* pWindowRes, SDiskbasedBuf* pRes
   SIDList list = getDataBufPagesIdList(pResultBuf);
 
   if (taosArrayGetSize(list) == 0) {
-    pData = getNewBufPage(pResultBuf, tid, &pageId);
+    pData = getNewBufPage(pResultBuf, &pageId);
     pData->num = sizeof(SFilePage);
   } else {
     SPageInfo* pi = getLastPageInfo(list);
@@ -313,7 +305,7 @@ static int32_t addNewWindowResultBuf(SResultRow* pWindowRes, SDiskbasedBuf* pRes
       // release current page first, and prepare the next one
       releaseBufPageInfo(pResultBuf, pi);
 
-      pData = getNewBufPage(pResultBuf, tid, &pageId);
+      pData = getNewBufPage(pResultBuf, &pageId);
       if (pData != NULL) {
         pData->num = sizeof(SFilePage);
       }
@@ -823,13 +815,6 @@ void setBlockSMAInfo(SqlFunctionCtx* pCtx, SExprInfo* pExprInfo, SSDataBlock* pB
   } else {
     pInput->colDataAggIsSet = false;
   }
-
-  // set the statistics data for primary time stamp column
-  //  if (pCtx->functionId == FUNCTION_SPREAD && pColumn->colId == PRIMARYKEY_TIMESTAMP_COL_ID) {
-  //    pCtx->isAggSet = true;
-  //    pCtx->agg.min = pBlock->info.window.skey;
-  //    pCtx->agg.max = pBlock->info.window.ekey;
-  //  }
 }
 
 bool isTaskKilled(SExecTaskInfo* pTaskInfo) {
@@ -865,146 +850,6 @@ STimeWindow getAlignQueryTimeWindow(SInterval* pInterval, int32_t precision, int
 
   return win;
 }
-
-#if 0
-static int32_t updateBlockLoadStatus(STaskAttr* pQuery, int32_t status) {
-
-  bool hasFirstLastFunc = false;
-  bool hasOtherFunc = false;
-
-  if (status == BLK_DATA_DATA_LOAD || status == BLK_DATA_FILTEROUT) {
-    return status;
-  }
-
-  for (int32_t i = 0; i < pQuery->numOfOutput; ++i) {
-    int32_t functionId = getExprFunctionId(&pQuery->pExpr1[i]);
-
-    if (functionId == FUNCTION_TS || functionId == FUNCTION_TS_DUMMY || functionId == FUNCTION_TAG ||
-        functionId == FUNCTION_TAG_DUMMY) {
-      continue;
-    }
-
-    if (functionId == FUNCTION_FIRST_DST || functionId == FUNCTION_LAST_DST) {
-      hasFirstLastFunc = true;
-    } else {
-      hasOtherFunc = true;
-    }
-
-  }
-
-  if (hasFirstLastFunc && status == BLK_DATA_NOT_LOAD) {
-    if (!hasOtherFunc) {
-      return BLK_DATA_FILTEROUT;
-    } else {
-      return BLK_DATA_DATA_LOAD;
-    }
-  }
-
-  return status;
-}
-
-#endif
-
-// static void updateDataCheckOrder(SQInfo *pQInfo, SQueryTableReq* pQueryMsg, bool stableQuery) {
-//   STaskAttr* pQueryAttr = pQInfo->runtimeEnv.pQueryAttr;
-//
-//   // in case of point-interpolation query, use asc order scan
-//   char msg[] = "QInfo:0x%"PRIx64" scan order changed for %s query, old:%d, new:%d, qrange exchanged, old qrange:%"
-//   PRId64
-//                "-%" PRId64 ", new qrange:%" PRId64 "-%" PRId64;
-//
-//   // todo handle the case the the order irrelevant query type mixed up with order critical query type
-//   // descending order query for last_row query
-//   if (isFirstLastRowQuery(pQueryAttr)) {
-//     //qDebug("QInfo:0x%"PRIx64" scan order changed for last_row query, old:%d, new:%d", pQInfo->qId,
-//     pQueryAttr->order.order, TSDB_ORDER_ASC);
-//
-//     pQueryAttr->order.order = TSDB_ORDER_ASC;
-//     if (pQueryAttr->window.skey > pQueryAttr->window.ekey) {
-//       TSWAP(pQueryAttr->window.skey, pQueryAttr->window.ekey);
-//     }
-//
-//     pQueryAttr->needReverseScan = false;
-//     return;
-//   }
-//
-//   if (pQueryAttr->groupbyColumn && pQueryAttr->order.order == TSDB_ORDER_DESC) {
-//     pQueryAttr->order.order = TSDB_ORDER_ASC;
-//     if (pQueryAttr->window.skey > pQueryAttr->window.ekey) {
-//       TSWAP(pQueryAttr->window.skey, pQueryAttr->window.ekey);
-//     }
-//
-//     pQueryAttr->needReverseScan = false;
-//     doUpdateLastKey(pQueryAttr);
-//     return;
-//   }
-//
-//   if (pQueryAttr->pointInterpQuery && pQueryAttr->interval.interval == 0) {
-//     if (!QUERY_IS_ASC_QUERY(pQueryAttr)) {
-//       //qDebug(msg, pQInfo->qId, "interp", pQueryAttr->order.order, TSDB_ORDER_ASC, pQueryAttr->window.skey,
-//       pQueryAttr->window.ekey, pQueryAttr->window.ekey, pQueryAttr->window.skey); TSWAP(pQueryAttr->window.skey,
-//       pQueryAttr->window.ekey, TSKEY);
-//     }
-//
-//     pQueryAttr->order.order = TSDB_ORDER_ASC;
-//     return;
-//   }
-//
-//   if (pQueryAttr->interval.interval == 0) {
-//     if (onlyFirstQuery(pQueryAttr)) {
-//       if (!QUERY_IS_ASC_QUERY(pQueryAttr)) {
-//         //qDebug(msg, pQInfo->qId, "only-first", pQueryAttr->order.order, TSDB_ORDER_ASC, pQueryAttr->window.skey,
-////               pQueryAttr->window.ekey, pQueryAttr->window.ekey, pQueryAttr->window.skey);
-//
-//        TSWAP(pQueryAttr->window.skey, pQueryAttr->window.ekey);
-//        doUpdateLastKey(pQueryAttr);
-//      }
-//
-//      pQueryAttr->order.order = TSDB_ORDER_ASC;
-//      pQueryAttr->needReverseScan = false;
-//    } else if (onlyLastQuery(pQueryAttr) && notContainSessionOrStateWindow(pQueryAttr)) {
-//      if (QUERY_IS_ASC_QUERY(pQueryAttr)) {
-//        //qDebug(msg, pQInfo->qId, "only-last", pQueryAttr->order.order, TSDB_ORDER_DESC, pQueryAttr->window.skey,
-////               pQueryAttr->window.ekey, pQueryAttr->window.ekey, pQueryAttr->window.skey);
-//
-//        TSWAP(pQueryAttr->window.skey, pQueryAttr->window.ekey);
-//        doUpdateLastKey(pQueryAttr);
-//      }
-//
-//      pQueryAttr->order.order = TSDB_ORDER_DESC;
-//      pQueryAttr->needReverseScan = false;
-//    }
-//
-//  } else {  // interval query
-//    if (stableQuery) {
-//      if (onlyFirstQuery(pQueryAttr)) {
-//        if (!QUERY_IS_ASC_QUERY(pQueryAttr)) {
-//          //qDebug(msg, pQInfo->qId, "only-first stable", pQueryAttr->order.order, TSDB_ORDER_ASC,
-////                 pQueryAttr->window.skey, pQueryAttr->window.ekey, pQueryAttr->window.ekey,
-/// pQueryAttr->window.skey);
-//
-//          TSWAP(pQueryAttr->window.skey, pQueryAttr->window.ekey);
-//          doUpdateLastKey(pQueryAttr);
-//        }
-//
-//        pQueryAttr->order.order = TSDB_ORDER_ASC;
-//        pQueryAttr->needReverseScan = false;
-//      } else if (onlyLastQuery(pQueryAttr)) {
-//        if (QUERY_IS_ASC_QUERY(pQueryAttr)) {
-//          //qDebug(msg, pQInfo->qId, "only-last stable", pQueryAttr->order.order, TSDB_ORDER_DESC,
-////                 pQueryAttr->window.skey, pQueryAttr->window.ekey, pQueryAttr->window.ekey,
-/// pQueryAttr->window.skey);
-//
-//          TSWAP(pQueryAttr->window.skey, pQueryAttr->window.ekey);
-//          doUpdateLastKey(pQueryAttr);
-//        }
-//
-//        pQueryAttr->order.order = TSDB_ORDER_DESC;
-//        pQueryAttr->needReverseScan = false;
-//      }
-//    }
-//  }
-//}
 
 #if 0
 static bool overlapWithTimeWindow(STaskAttr* pQueryAttr, SDataBlockInfo* pBlockInfo) {
@@ -1231,24 +1076,6 @@ static void updateTableQueryInfoForReverseScan(STableQueryInfo* pTableQueryInfo)
   if (pTableQueryInfo == NULL) {
     return;
   }
-
-  //  TSWAP(pTableQueryInfo->win.skey, pTableQueryInfo->win.ekey);
-  //  pTableQueryInfo->lastKey = pTableQueryInfo->win.skey;
-
-  //  SWITCH_ORDER(pTableQueryInfo->cur.order);
-  //  pTableQueryInfo->cur.vgroupIndex = -1;
-
-  // set the index to be the end slot of result rows array
-  //  SResultRowInfo* pResultRowInfo = &pTableQueryInfo->resInfo;
-  //  if (pResultRowInfo->size > 0) {
-  //    pResultRowInfo->curPos = pResultRowInfo->size - 1;
-  //  } else {
-  //    pResultRowInfo->curPos = -1;
-  //  }
-}
-
-void initResultRow(SResultRow* pResultRow) {
-  //  pResultRow->pEntryInfo = (struct SResultRowEntryInfo*)((char*)pResultRow + sizeof(SResultRow));
 }
 
 void setTaskStatus(SExecTaskInfo* pTaskInfo, int8_t status) {
@@ -1259,15 +1086,6 @@ void setTaskStatus(SExecTaskInfo* pTaskInfo, int8_t status) {
     CLEAR_QUERY_STATUS(pTaskInfo, TASK_NOT_COMPLETED);
     pTaskInfo->status |= status;
   }
-}
-
-void destroyTableQueryInfoImpl(STableQueryInfo* pTableQueryInfo) {
-  if (pTableQueryInfo == NULL) {
-    return;
-  }
-
-  //  taosVariantDestroy(&pTableQueryInfo->tag);
-  //  cleanupResultRowInfo(&pTableQueryInfo->resInfo);
 }
 
 void setResultRowInitCtx(SResultRow* pResult, SqlFunctionCtx* pCtx, int32_t numOfOutput, int32_t* rowEntryInfoOffset) {
@@ -2821,92 +2639,6 @@ int32_t getTableScanInfo(SOperatorInfo* pOperator, int32_t* order, int32_t* scan
     }
   }
 }
-#if 0
-int32_t doPrepareScan(SOperatorInfo* pOperator, uint64_t uid, int64_t ts) {
-  uint8_t type = pOperator->operatorType;
-
-  pOperator->status = OP_OPENED;
-
-  if (type == QUERY_NODE_PHYSICAL_PLAN_STREAM_SCAN) {
-    SStreamScanInfo* pScanInfo = pOperator->info;
-    pScanInfo->blockType = STREAM_INPUT__TABLE_SCAN;
-
-    pScanInfo->pTableScanOp->status = OP_OPENED;
-
-    STableScanInfo* pInfo = pScanInfo->pTableScanOp->info;
-    ASSERT(pInfo->scanMode == TABLE_SCAN__TABLE_ORDER);
-
-    if (uid == 0) {
-      pInfo->noTable = 1;
-      return TSDB_CODE_SUCCESS;
-    }
-
-    /*if (pSnapShotScanInfo->dataReader == NULL) {*/
-    /*pSnapShotScanInfo->dataReader = tsdbReaderOpen(pHandle->vnode, &pSTInfo->cond, tableList, 0, 0);*/
-    /*pSnapShotScanInfo->scanMode = TABLE_SCAN__TABLE_ORDER;*/
-    /*}*/
-
-    pInfo->noTable = 0;
-
-    if (pInfo->lastStatus.uid != uid || pInfo->lastStatus.ts != ts) {
-      SExecTaskInfo* pTaskInfo = pOperator->pTaskInfo;
-
-      int32_t tableSz = taosArrayGetSize(pTaskInfo->tableqinfoList.pTableList);
-      bool    found = false;
-      for (int32_t i = 0; i < tableSz; i++) {
-        STableKeyInfo* pTableInfo = taosArrayGet(pTaskInfo->tableqinfoList.pTableList, i);
-        if (pTableInfo->uid == uid) {
-          found = true;
-          pInfo->currentTable = i;
-        }
-      }
-      // TODO after processing drop, found can be false
-      ASSERT(found);
-
-      tsdbSetTableId(pInfo->dataReader, uid);
-      int64_t oldSkey = pInfo->cond.twindows.skey;
-      pInfo->cond.twindows.skey = ts + 1;
-      tsdbReaderReset(pInfo->dataReader, &pInfo->cond);
-      pInfo->cond.twindows.skey = oldSkey;
-      pInfo->scanTimes = 0;
-
-      qDebug("tsdb reader offset seek to uid %" PRId64 " ts %" PRId64 ", table cur set to %d , all table num %d", uid, ts,
-             pInfo->currentTable, tableSz);
-    }
-
-    return TSDB_CODE_SUCCESS;
-
-  } else {
-    if (pOperator->numOfDownstream == 1) {
-      return doPrepareScan(pOperator->pDownstream[0], uid, ts);
-    } else if (pOperator->numOfDownstream == 0) {
-      qError("failed to find stream scan operator to set the input data block");
-      return TSDB_CODE_QRY_APP_ERROR;
-    } else {
-      qError("join not supported for stream block scan");
-      return TSDB_CODE_QRY_APP_ERROR;
-    }
-  }
-}
-
-int32_t doGetScanStatus(SOperatorInfo* pOperator, uint64_t* uid, int64_t* ts) {
-  int32_t type = pOperator->operatorType;
-  if (type == QUERY_NODE_PHYSICAL_PLAN_STREAM_SCAN) {
-    SStreamScanInfo* pScanInfo = pOperator->info;
-    STableScanInfo*  pSnapShotScanInfo = pScanInfo->pTableScanOp->info;
-    *uid = pSnapShotScanInfo->lastStatus.uid;
-    *ts = pSnapShotScanInfo->lastStatus.ts;
-  } else {
-    if (pOperator->pDownstream[0] == NULL) {
-      return TSDB_CODE_INVALID_PARA;
-    } else {
-      doGetScanStatus(pOperator->pDownstream[0], uid, ts);
-    }
-  }
-
-  return TSDB_CODE_SUCCESS;
-}
-#endif
 
 // this is a blocking operator
 static int32_t doOpenAggregateOptr(SOperatorInfo* pOperator) {
@@ -3030,7 +2762,7 @@ int32_t aggEncodeResultRow(SOperatorInfo* pOperator, char** result, int32_t* len
   SResultRow*         pRow = (SResultRow*)((char*)pPage + pos->offset);
   setBufPageDirty(pPage, true);
   releaseBufPage(pSup->pResultBuf, pPage);
-  
+
   int32_t iter = 0;
   void*   pIter = NULL;
   while ((pIter = tSimpleHashIterate(pSup->pResultRowHashTable, pIter, &iter))) {
@@ -3092,7 +2824,7 @@ int32_t aggDecodeResultRow(SOperatorInfo* pOperator, char* result) {
     offset += sizeof(int32_t);
 
     uint64_t    tableGroupId = *(uint64_t*)(result + offset);
-    SResultRow* resultRow = getNewResultRow(pSup->pResultBuf, tableGroupId, pSup->resultRowSize);
+    SResultRow* resultRow = getNewResultRow(pSup->pResultBuf, &pSup->currentPageId, pSup->resultRowSize);
     if (!resultRow) {
       return TSDB_CODE_TSC_INVALID_INPUT;
     }
@@ -3114,7 +2846,6 @@ int32_t aggDecodeResultRow(SOperatorInfo* pOperator, char* result) {
     resultRow->offset = pOffset;
     offset += valueLen;
 
-    initResultRow(resultRow);
     pInfo->resultRowInfo.cur = (SResultRowPosition){.pageId = resultRow->pageId, .offset = resultRow->offset};
     // releaseBufPage(pSup->pResultBuf, getBufPage(pSup->pResultBuf, pageId));
   }
@@ -3440,8 +3171,10 @@ int32_t getBufferPgSize(int32_t rowSize, uint32_t* defaultPgsz, uint32_t* defaul
 
 int32_t doInitAggInfoSup(SAggSupporter* pAggSup, SqlFunctionCtx* pCtx, int32_t numOfOutput, size_t keyBufSize,
                          const char* pKey) {
+  int32_t    code = 0;
   _hash_fn_t hashFn = taosGetDefaultHashFunction(TSDB_DATA_TYPE_BINARY);
 
+  pAggSup->currentPageId = -1;
   pAggSup->resultRowSize = getResultRowSize(pCtx, numOfOutput);
   pAggSup->keyBuf = taosMemoryCalloc(1, keyBufSize + POINTER_BYTES + sizeof(int64_t));
   pAggSup->pResultRowHashTable = tSimpleHashInit(10, hashFn);
@@ -3455,18 +3188,18 @@ int32_t doInitAggInfoSup(SAggSupporter* pAggSup, SqlFunctionCtx* pCtx, int32_t n
   getBufferPgSize(pAggSup->resultRowSize, &defaultPgsz, &defaultBufsz);
 
   if (!osTempSpaceAvailable()) {
-    terrno = TSDB_CODE_NO_AVAIL_DISK;
-    qError("Init stream agg supporter failed since %s", terrstr(terrno));
-    return terrno;
-  }
-
-  int32_t code = createDiskbasedBuf(&pAggSup->pResultBuf, defaultPgsz, defaultBufsz, pKey, tsTempDir);
-  if (code != TSDB_CODE_SUCCESS) {
-    qError("Create agg result buf failed since %s", tstrerror(code));
+    code = TSDB_CODE_NO_AVAIL_DISK;
+    qError("Init stream agg supporter failed since %s, %s", terrstr(code), pKey);
     return code;
   }
 
-  return TSDB_CODE_SUCCESS;
+  code = createDiskbasedBuf(&pAggSup->pResultBuf, defaultPgsz, defaultBufsz, pKey, tsTempDir);
+  if (code != TSDB_CODE_SUCCESS) {
+    qError("Create agg result buf failed since %s, %s", tstrerror(code), pKey);
+    return code;
+  }
+
+  return code;
 }
 
 void cleanupAggSup(SAggSupporter* pAggSup) {
@@ -3488,7 +3221,7 @@ int32_t initAggInfo(SExprSupp* pSup, SAggSupporter* pAggSup, SExprInfo* pExprInf
   }
 
   for (int32_t i = 0; i < numOfCols; ++i) {
-    pSup->pCtx[i].pBuf = pAggSup->pResultBuf;
+    pSup->pCtx[i].saveHandle.pBuf = pAggSup->pResultBuf;
   }
 
   return TSDB_CODE_SUCCESS;
@@ -3520,6 +3253,7 @@ void* destroySqlFunctionCtx(SqlFunctionCtx* pCtx, int32_t numOfOutput) {
     }
 
     taosMemoryFreeClear(pCtx[i].subsidiaries.pCtx);
+    taosMemoryFreeClear(pCtx[i].subsidiaries.buf);
     taosMemoryFree(pCtx[i].input.pData);
     taosMemoryFree(pCtx[i].input.pColumnDataAgg);
   }
@@ -4071,8 +3805,8 @@ SOperatorInfo* createOperatorTree(SPhysiNode* pPhyNode, SExecTaskInfo* pTaskInfo
           STableKeyInfo* pKeyInfo = taosArrayGet(pTableListInfo->pTableList, i);
           qDebug("creating stream task: add table %" PRId64, pKeyInfo->uid);
         }
-      }
 #endif
+      }
 
       pTaskInfo->schemaInfo.qsw = extractQueriedColumnSchema(&pTableScanNode->scan);
       pOperator = createStreamScanOperatorInfo(pHandle, pTableScanNode, pTagCond, pTaskInfo);
@@ -4239,6 +3973,8 @@ SOperatorInfo* createOperatorTree(SPhysiNode* pPhyNode, SExecTaskInfo* pTaskInfo
     pOptr = createStreamFinalSessionAggOperatorInfo(ops[0], pPhyNode, pTaskInfo, children);
   } else if (QUERY_NODE_PHYSICAL_PLAN_PARTITION == type) {
     pOptr = createPartitionOperatorInfo(ops[0], (SPartitionPhysiNode*)pPhyNode, pTaskInfo);
+  } else if (QUERY_NODE_PHYSICAL_PLAN_STREAM_PARTITION == type) {
+    pOptr = createStreamPartitionOperatorInfo(ops[0], (SPartitionPhysiNode*)pPhyNode, pTaskInfo);
   } else if (QUERY_NODE_PHYSICAL_PLAN_MERGE_STATE == type) {
     SStateWinodwPhysiNode* pStateNode = (SStateWinodwPhysiNode*)pPhyNode;
     pOptr = createStatewindowOperatorInfo(ops[0], pStateNode, pTaskInfo);
@@ -4296,42 +4032,6 @@ SArray* extractColumnInfo(SNodeList* pNodeList) {
 
   return pList;
 }
-
-#if 0
-STsdbReader* doCreateDataReader(STableScanPhysiNode* pTableScanNode, SReadHandle* pHandle,
-                                STableListInfo* pTableListInfo, const char* idstr) {
-  int32_t code = getTableList(pHandle->meta, pHandle->vnode, &pTableScanNode->scan, pTableListInfo);
-  if (code != TSDB_CODE_SUCCESS) {
-    goto _error;
-  }
-
-  if (taosArrayGetSize(pTableListInfo->pTableList) == 0) {
-    code = 0;
-    qDebug("no table qualified for query, %s", idstr);
-    goto _error;
-  }
-
-  SQueryTableDataCond cond = {0};
-  code = initQueryTableDataCond(&cond, pTableScanNode);
-  if (code != TSDB_CODE_SUCCESS) {
-    goto _error;
-  }
-
-  STsdbReader* pReader;
-  code = tsdbReaderOpen(pHandle->vnode, &cond, pTableListInfo->pTableList, &pReader, idstr);
-  if (code != TSDB_CODE_SUCCESS) {
-    goto _error;
-  }
-
-  cleanupQueryTableDataCond(&cond);
-
-  return pReader;
-
-_error:
-  terrno = code;
-  return NULL;
-}
-#endif
 
 static int32_t extractTbscanInStreamOpTree(SOperatorInfo* pOperator, STableScanInfo** ppInfo) {
   if (pOperator->operatorType != QUERY_NODE_PHYSICAL_PLAN_STREAM_SCAN) {
@@ -4574,7 +4274,7 @@ _complete:
   return code;
 }
 
-static void doDestroyTableList(STableListInfo* pTableqinfoList) {
+void doDestroyTableList(STableListInfo* pTableqinfoList) {
   taosArrayDestroy(pTableqinfoList->pTableList);
   taosHashCleanup(pTableqinfoList->map);
   if (pTableqinfoList->needSortTableByGroupId) {
@@ -4678,6 +4378,7 @@ int32_t getOperatorExplainExecInfo(SOperatorInfo* operatorInfo, SArray* pExecInf
 
 int32_t initStreamAggSupporter(SStreamAggSupporter* pSup, const char* pKey, SqlFunctionCtx* pCtx, int32_t numOfOutput,
                                int32_t size) {
+  pSup->currentPageId = -1;
   pSup->resultRowSize = getResultRowSize(pCtx, numOfOutput);
   pSup->keySize = sizeof(int64_t) + sizeof(TSKEY);
   pSup->pKeyBuf = taosMemoryCalloc(1, pSup->keySize);
@@ -4705,7 +4406,8 @@ int32_t initStreamAggSupporter(SStreamAggSupporter* pSup, const char* pKey, SqlF
   }
   int32_t code = createDiskbasedBuf(&pSup->pResultBuf, pageSize, bufSize, pKey, tsTempDir);
   for (int32_t i = 0; i < numOfOutput; ++i) {
-    pCtx[i].pBuf = pSup->pResultBuf;
+    pCtx[i].saveHandle.pBuf = pSup->pResultBuf;
   }
+
   return code;
 }

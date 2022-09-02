@@ -627,6 +627,7 @@ static void buildCreateTbReq(SVCreateTbReq* pTbReq, const char* tname, STag* pTa
   if (sname) pTbReq->ctb.name = strdup(sname);
   pTbReq->ctb.pTag = (uint8_t*)pTag;
   pTbReq->ctb.tagName = taosArrayDup(tagName);
+  pTbReq->ttl = TSDB_DEFAULT_TABLE_TTL;
   pTbReq->commentLen = -1;
 
   return;
@@ -962,6 +963,40 @@ static int32_t ignoreAutoCreateTableClause(SInsertParseContext* pCxt) {
   return code;
 }
 
+static int32_t parseTableOptions(SInsertParseContext* pCxt) {
+  do {
+    int32_t index = 0;
+    SToken  sToken;
+    NEXT_TOKEN_KEEP_SQL(pCxt->pSql, sToken, index);
+    if (TK_TTL == sToken.type) {
+      pCxt->pSql += index;
+      NEXT_TOKEN(pCxt->pSql, sToken);
+      if (TK_NK_INTEGER != sToken.type) {
+        return buildSyntaxErrMsg(&pCxt->msg, "Invalid option ttl", sToken.z);
+      }
+      pCxt->createTblReq.ttl = taosStr2Int32(sToken.z, NULL, 10);
+    } else if (TK_COMMENT == sToken.type) {
+      pCxt->pSql += index;
+      NEXT_TOKEN(pCxt->pSql, sToken);
+      if (TK_NK_STRING != sToken.type) {
+        return buildSyntaxErrMsg(&pCxt->msg, "Invalid option comment", sToken.z);
+      }
+      if (sToken.n >= TSDB_TB_COMMENT_LEN) {
+        return buildSyntaxErrMsg(&pCxt->msg, "comment too long", sToken.z);
+      }
+      int32_t len = trimString(sToken.z, sToken.n, pCxt->tmpTokenBuf, TSDB_TB_COMMENT_LEN);
+      pCxt->createTblReq.comment = strndup(pCxt->tmpTokenBuf, len);
+      if (NULL == pCxt->createTblReq.comment) {
+        return TSDB_CODE_OUT_OF_MEMORY;
+      }
+      pCxt->createTblReq.commentLen = len;
+    } else {
+      break;
+    }
+  } while (1);
+  return TSDB_CODE_SUCCESS;
+}
+
 // pSql -> stb_name [(tag1_name, ...)] TAGS (tag1_value, ...)
 static int32_t parseUsingClause(SInsertParseContext* pCxt, int32_t tbNo, SName* name, char* tbFName) {
   int32_t      len = strlen(tbFName);
@@ -1013,7 +1048,7 @@ static int32_t parseUsingClause(SInsertParseContext* pCxt, int32_t tbNo, SName* 
     return buildSyntaxErrMsg(&pCxt->msg, ") is expected", sToken.z);
   }
 
-  return TSDB_CODE_SUCCESS;
+  return parseTableOptions(pCxt);
 }
 
 static int parseOneRow(SInsertParseContext* pCxt, STableDataBlocks* pDataBlocks, int16_t timePrec, bool* gotRow,
@@ -1508,6 +1543,10 @@ int32_t parseInsertSql(SParseContext* pContext, SQuery** pQuery, SParseMetaCache
       pDb = taosHashIterate(context.pDbFNameHashObj, pDb);
     }
   }
+  if (pContext->pStmtCb) {
+    context.pVgroupsHashObj = NULL;
+    context.pTableBlockHashObj = NULL;
+  }
   destroyInsertParseContext(&context);
   return code;
 }
@@ -1535,6 +1574,21 @@ static int32_t skipValuesClause(SInsertParseSyntaxCxt* pCxt) {
 
 static int32_t skipTagsClause(SInsertParseSyntaxCxt* pCxt) { return skipParentheses(pCxt); }
 
+static int32_t skipTableOptions(SInsertParseSyntaxCxt* pCxt) {
+  do {
+    int32_t index = 0;
+    SToken  sToken;
+    NEXT_TOKEN_KEEP_SQL(pCxt->pSql, sToken, index);
+    if (TK_TTL == sToken.type || TK_COMMENT == sToken.type) {
+      pCxt->pSql += index;
+      NEXT_TOKEN(pCxt->pSql, sToken);
+    } else {
+      break;
+    }
+  } while (1);
+  return TSDB_CODE_SUCCESS;
+}
+
 // pSql -> [(tag1_name, ...)] TAGS (tag1_value, ...)
 static int32_t skipUsingClause(SInsertParseSyntaxCxt* pCxt) {
   SToken sToken;
@@ -1553,6 +1607,7 @@ static int32_t skipUsingClause(SInsertParseSyntaxCxt* pCxt) {
     return buildSyntaxErrMsg(&pCxt->msg, "( is expected", sToken.z);
   }
   CHECK_CODE(skipTagsClause(pCxt));
+  CHECK_CODE(skipTableOptions(pCxt));
 
   return TSDB_CODE_SUCCESS;
 }
@@ -2096,7 +2151,7 @@ static int32_t smlBoundColumnData(SArray* cols, SParsedDataColInfo* pColList, SS
     SToken   sToken = {.n = kv->keyLen, .z = (char*)kv->key};
     col_id_t t = lastColIdx + 1;
     col_id_t index = ((t == 0 && !isTag) ? 0 : findCol(&sToken, t, nCols, pSchema));
-    uDebug("SML, index:%d, t:%d, ncols:%d, kv->name:%s", index, t, nCols, kv->key);
+    uDebug("SML, index:%d, t:%d, ncols:%d", index, t, nCols);
     if (index < 0 && t > 0) {
       index = findCol(&sToken, 0, t, pSchema);
       isOrdered = false;
@@ -2317,9 +2372,7 @@ int32_t smlBindData(void* handle, SArray* tags, SArray* colsSchema, SArray* cols
         if (p) kv = *p;
       }
 
-      if (!kv || kv->length == 0) {
-        MemRowAppend(&pBuf, NULL, 0, &param);
-      } else {
+      if (kv){
         int32_t colLen = kv->length;
         if (pColSchema->type == TSDB_DATA_TYPE_TIMESTAMP) {
           //          uError("SML:data before:%" PRId64 ", precision:%d", kv->i, pTableMeta->tableInfo.precision);
@@ -2332,6 +2385,8 @@ int32_t smlBindData(void* handle, SArray* tags, SArray* colsSchema, SArray* cols
         } else {
           MemRowAppend(&pBuf, &(kv->value), colLen, &param);
         }
+      }else{
+        pBuilder->hasNone = true;
       }
 
       if (PRIMARYKEY_TIMESTAMP_COL_ID == pColSchema->colId) {

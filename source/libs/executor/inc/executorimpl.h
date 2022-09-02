@@ -143,6 +143,9 @@ typedef struct {
   STqOffsetVal   prepareStatus; // for tmq
   STqOffsetVal   lastStatus;    // for tmq
   SMqMetaRsp     metaRsp;       // for tmq fetching meta
+  int8_t  returned;
+  int64_t snapshotVer;
+
   SSchemaWrapper *schema;
   char           tbName[TSDB_TABLE_NAME_LEN];
   SSDataBlock*   pullOverBlk;   // for streaming
@@ -303,6 +306,7 @@ typedef struct SAggSupporter {
   char*          keyBuf;               // window key buffer
   SDiskbasedBuf* pResultBuf;           // query result buffer based on blocked-wised disk file
   int32_t        resultRowSize;        // the result buffer size for each result row, with the meta data size for each row
+  int32_t        currentPageId;        // current write page id
 } SAggSupporter;
 
 typedef struct {
@@ -327,7 +331,6 @@ typedef struct STableScanInfo {
   SQueryTableDataCond cond;
   int32_t         scanFlag;     // table scan flag to denote if it is a repeat/reverse/main scan
   int32_t         dataBlockLoadFlag;
-//  SInterval       interval;     // if the upstream is an interval operator, the interval info is also kept here to get the time window to check if current data block needs to be loaded.
   SSampleExecInfo sample;       // sample execution info
   int32_t         currentGroupId;
   int32_t         currentTable;
@@ -407,6 +410,7 @@ typedef enum EStreamScanMode {
   STREAM_SCAN_FROM_READERHANDLE = 1,
   STREAM_SCAN_FROM_RES,
   STREAM_SCAN_FROM_UPDATERES,
+  STREAM_SCAN_FROM_DELETERES,
   STREAM_SCAN_FROM_DATAREADER_RETRIEVE,
   STREAM_SCAN_FROM_DATAREADER_RANGE,
 } EStreamScanMode;
@@ -431,15 +435,28 @@ typedef struct SStreamAggSupporter {
   char*          pKeyBuf;              // window key buffer
   SDiskbasedBuf* pResultBuf;           // query result buffer based on blocked-wised disk file
   int32_t        resultRowSize;        // the result buffer size for each result row, with the meta data size for each row
+  int32_t        currentPageId;        // buffer page that is active
   SSDataBlock*   pScanBlock;
 } SStreamAggSupporter;
 
-typedef struct SessionWindowSupporter {
+typedef struct SWindowSupporter {
   SStreamAggSupporter* pStreamAggSup;
   int64_t              gap;
   uint16_t             parentType;
   SAggSupporter*       pIntervalAggSup;
-} SessionWindowSupporter;
+} SWindowSupporter;
+
+typedef struct SPartitionBySupporter {
+  SArray*         pGroupCols;     // group by columns, SArray<SColumn>
+  SArray*         pGroupColVals;  // current group column values, SArray<SGroupKeys>
+  char*           keyBuf;         // group by keys for hash
+  bool            needCalc;       // partition by column
+} SPartitionBySupporter;
+
+typedef struct SPartitionDataInfo {
+  uint64_t        groupId;
+  SArray*         rowIds;
+} SPartitionDataInfo;
 
 typedef struct STimeWindowSupp {
   int8_t           calTrigger;
@@ -474,7 +491,9 @@ typedef struct SStreamScanInfo {
   SOperatorInfo*         pStreamScanOp;
   SOperatorInfo*         pTableScanOp;
   SArray*                childIds;
-  SessionWindowSupporter sessionSup;
+  SWindowSupporter       windowSup;
+  SPartitionBySupporter  partitionSup;
+  SExprSupp*             pPartScalarSup;
   bool                   assignBlockUid;  // assign block uid to groupId, temporarily used for generating rollup SMA.
   int32_t                scanWinIndex;    // for state operator
   int32_t                pullDataResIndex;
@@ -485,24 +504,23 @@ typedef struct SStreamScanInfo {
   STimeWindowAggSupp     twAggSup;
   SSDataBlock*           pUpdateDataRes;
   // status for tmq
-  // SSchemaWrapper schema;
-  SNodeList*             pGroupTags;
-  SNode*                 pTagCond;
-  SNode*                 pTagIndexCond;
+  SNodeList* pGroupTags;
+  SNode*     pTagCond;
+  SNode*     pTagIndexCond;
 } SStreamScanInfo;
 
-typedef struct SStreamRawScanInfo{
-//  int8_t    subType;
-//  bool      withMeta;
-//  int64_t   suid;
-//  int64_t   snapVersion;
-//  void     *metaInfo;
-//  void     *dataInfo;
-  SVnode*         vnode;
-  SSDataBlock     pRes;         // result SSDataBlock
-  STsdbReader*    dataReader;
-  SSnapContext*   sContext;
-}SStreamRawScanInfo;
+typedef struct {
+  //  int8_t    subType;
+  //  bool      withMeta;
+  //  int64_t   suid;
+  //  int64_t   snapVersion;
+  //  void     *metaInfo;
+  //  void     *dataInfo;
+  SVnode*       vnode;
+  SSDataBlock   pRes;  // result SSDataBlock
+  STsdbReader*  dataReader;
+  SSnapContext* sContext;
+} SStreamRawScanInfo;
 
 typedef struct SSysTableScanInfo {
   SRetrieveMetaTableRsp* pRsp;
@@ -527,14 +545,14 @@ typedef struct SBlockDistInfo {
   SSDataBlock* pResBlock;
   void*        pHandle;
   SReadHandle  readHandle;
-  uint64_t     uid;        // table uid
+  uint64_t     uid;  // table uid
 } SBlockDistInfo;
 
 // todo remove this
 typedef struct SOptrBasicInfo {
-  SResultRowInfo  resultRowInfo;
-  SSDataBlock*    pRes;
-  bool            mergeResultBlock;
+  SResultRowInfo resultRowInfo;
+  SSDataBlock*   pRes;
+  bool           mergeResultBlock;
 } SOptrBasicInfo;
 
 typedef struct SIntervalAggOperatorInfo {
@@ -688,7 +706,6 @@ typedef struct SPartitionOperatorInfo {
   SArray*        sortedGroupArray;   // SDataGroupInfo sorted by group id
   int32_t        groupIndex;  // group index
   int32_t        pageIndex;   // page index of current group
-  SSDataBlock*   pUpdateRes;
   SExprSupp      scalarSup;
 } SPartitionOperatorInfo;
 
@@ -740,8 +757,8 @@ typedef struct SStreamSessionAggOperatorInfo {
   SSDataBlock*         pWinBlock;       // window result
   SqlFunctionCtx*      pDummyCtx;       // for combine
   SSDataBlock*         pDelRes;         // delete result
-  bool                 returnDelete;
   SSDataBlock*         pUpdateRes;      // update window
+  bool                 returnUpdate;
   SHashObj*            pStDeleted;
   void*                pDelIterator;
   SArray*              pChildren;       // cache for children's result; final stream operator
@@ -749,6 +766,16 @@ typedef struct SStreamSessionAggOperatorInfo {
   bool                 isFinal;
   bool                 ignoreExpiredData;
 } SStreamSessionAggOperatorInfo;
+
+typedef struct SStreamPartitionOperatorInfo {
+  SOptrBasicInfo        binfo;
+  SPartitionBySupporter partitionSup;
+  SExprSupp             scalarSup;
+  SHashObj*             pPartitions;
+  void*                 parIte;
+  SSDataBlock*          pInputDataBlock;
+  int32_t               tsColIndex;
+} SStreamPartitionOperatorInfo;
 
 typedef struct STimeSliceOperatorInfo {
   SSDataBlock*            pRes;
@@ -951,6 +978,9 @@ SOperatorInfo* createRawScanOperatorInfo(SReadHandle* pHandle, SExecTaskInfo* pT
 SOperatorInfo* createFillOperatorInfo(SOperatorInfo* downstream, SFillPhysiNode* pPhyFillNode, SExecTaskInfo* pTaskInfo);
 SOperatorInfo* createStatewindowOperatorInfo(SOperatorInfo* downstream, SStateWinodwPhysiNode* pStateNode, SExecTaskInfo* pTaskInfo);
 SOperatorInfo* createPartitionOperatorInfo(SOperatorInfo* downstream, SPartitionPhysiNode* pPartNode, SExecTaskInfo* pTaskInfo);
+
+SOperatorInfo* createStreamPartitionOperatorInfo(SOperatorInfo* downstream, SPartitionPhysiNode* pPartNode, SExecTaskInfo* pTaskInfo);
+
 SOperatorInfo* createTimeSliceOperatorInfo(SOperatorInfo* downstream, SPhysiNode* pNode, SExecTaskInfo* pTaskInfo);
 SOperatorInfo* createMergeJoinOperatorInfo(SOperatorInfo** pDownstream, int32_t numOfDownstream, SSortMergeJoinPhysiNode* pJoinNode,
                                            SExecTaskInfo* pTaskInfo);
@@ -1009,7 +1039,7 @@ int32_t getNumOfRowsInTimeWindow(SDataBlockInfo* pDataBlockInfo, TSKEY* pPrimary
 int32_t binarySearchForKey(char* pValue, int num, TSKEY key, int order);
 int32_t initStreamAggSupporter(SStreamAggSupporter* pSup, const char* pKey, SqlFunctionCtx* pCtx, int32_t numOfOutput,
     int32_t size);
-SResultRow* getNewResultRow(SDiskbasedBuf* pResultBuf, int64_t tableGroupId, int32_t interBufSize);
+SResultRow* getNewResultRow(SDiskbasedBuf* pResultBuf, int32_t* currentPageId, int32_t interBufSize);
 SResultWindowInfo* getSessionTimeWindow(SStreamAggSupporter* pAggSup, TSKEY startTs,
     TSKEY endTs, uint64_t groupId, int64_t gap, int32_t* pIndex);
 SResultWindowInfo* getCurSessionWindow(SStreamAggSupporter* pAggSup, TSKEY startTs,
@@ -1019,8 +1049,9 @@ bool functionNeedToExecute(SqlFunctionCtx* pCtx);
 bool isOverdue(TSKEY ts, STimeWindowAggSupp* pSup);
 bool isCloseWindow(STimeWindow* pWin, STimeWindowAggSupp* pSup);
 bool isDeletedWindow(STimeWindow* pWin, uint64_t groupId, SAggSupporter* pSup);
-void appendOneRow(SSDataBlock* pBlock, TSKEY* pStartTs, TSKEY* pEndTs, int32_t uidCol, uint64_t* pID);
+void appendOneRow(SSDataBlock* pBlock, TSKEY* pStartTs, TSKEY* pEndTs, uint64_t* pUid, uint64_t* pGp);
 void printDataBlock(SSDataBlock* pBlock, const char* flag);
+uint64_t calGroupIdByData(SPartitionBySupporter* pParSup, SExprSupp* pExprSup, SSDataBlock* pBlock, int32_t rowId);
 
 int32_t finalizeResultRowIntoResultDataBlock(SDiskbasedBuf* pBuf, SResultRowPosition* resultRowPosition,
                                        SqlFunctionCtx* pCtx, SExprInfo* pExprInfo, int32_t numOfExprs, const int32_t* rowCellOffset,

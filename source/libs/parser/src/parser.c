@@ -224,7 +224,7 @@ int32_t qParseSqlSyntax(SParseContext* pCxt, SQuery** pQuery, struct SCatalogReq
   int32_t         code = TSDB_CODE_SUCCESS;
   bool            isInsertValues = qIsInsertValuesSql(pCxt->pSql, pCxt->sqlLen);
 
-#if 1
+#if 0
   if (isInsertValues) {
     code = parseInsertSyntaxNew(pCxt, pQuery, pCatalogReq);
   } else {
@@ -262,7 +262,7 @@ int32_t qAnalyseSqlSemantic(SParseContext* pCxt, const struct SCatalogReq* pCata
       .minElapsedMs = 10000000, .maxElapsedMs = 0, .totalElapsedMs = 0, .totalSqlLen = 0, .count = 0};
   int64_t start = taosGetTimestampUs();
 
-#if 1
+#if 0
   bool    isInsertValues = (QUERY_NODE_INSERT_VALUES_STMT == nodeType(pQuery->pRoot));
   int32_t code = TSDB_CODE_SUCCESS;
   if (isInsertValues) {

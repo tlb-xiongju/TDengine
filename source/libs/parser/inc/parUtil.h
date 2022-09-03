@@ -118,6 +118,7 @@ STableComInfo getTableInfo(const STableMeta* pTableMeta);
 STableMeta*   tableMetaDup(const STableMeta* pTableMeta);
 
 int32_t trimString(const char* src, int32_t len, char* dst, int32_t dlen);
+int32_t trimVarchar(const char* src, int32_t len, char* dst, int32_t dlen);
 
 int32_t skipInsertInto(char** pSql, SMsgBuf* pMsg);
 int32_t checkAndTrimValue(SToken* pToken, char* tmpTokenBuf, SMsgBuf* pMsgBuf);

@@ -304,6 +304,49 @@ int32_t trimString(const char* src, int32_t len, char* dst, int32_t dlen) {
   return j;
 }
 
+int32_t trimVarchar(const char* src, int32_t len, char* dst, int32_t dlen) {
+  if (len <= 0 || dlen <= 0) return 0;
+
+  char    delim = src[0];
+  int32_t j = 0;
+  for (uint32_t k = 1; k < len - 1 && j < dlen; ++k) {
+    if (src[k] == delim && src[k + 1] == delim) {  // deal with "", ''
+      dst[j] = src[k + 1];
+      j++;
+      k++;
+      continue;
+    }
+
+    if (src[k] == '\\') {  // deal with escape character
+      if (src[k + 1] == 'n') {
+        dst[j] = '\n';
+      } else if (src[k + 1] == 'r') {
+        dst[j] = '\r';
+      } else if (src[k + 1] == 't') {
+        dst[j] = '\t';
+      } else if (src[k + 1] == '\\') {
+        dst[j] = '\\';
+      } else if (src[k + 1] == '\'') {
+        dst[j] = '\'';
+      } else if (src[k + 1] == '"') {
+        dst[j] = '"';
+      } else if (src[k + 1] == '%' || src[k + 1] == '_') {
+        dst[j++] = src[k];
+        dst[j] = src[k + 1];
+      } else {
+        dst[j] = src[k + 1];
+      }
+      j++;
+      k++;
+      continue;
+    }
+
+    dst[j] = src[k];
+    j++;
+  }
+  return j == dlen ? -1 : j;
+}
+
 static bool isValidateTag(char* input) {
   if (!input) return false;
   for (size_t i = 0; i < strlen(input); ++i) {
@@ -1168,7 +1211,7 @@ void destoryParseMetaCache(SParseMetaCache* pMetaCache, bool request) {
     taosArrayDestroy(p->pTableVgroupReq);
 
     p = taosHashIterate(pMetaCache->pInsertTables, p);
-  }  
+  }
   taosHashCleanup(pMetaCache->pInsertTables);
   taosHashCleanup(pMetaCache->pDbVgroup);
   taosHashCleanup(pMetaCache->pDbCfg);

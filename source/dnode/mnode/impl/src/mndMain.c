@@ -442,6 +442,8 @@ void mndStop(SMnode *pMnode) {
   mndCleanupTimer(pMnode);
 }
 
+int32_t mndProcessSyncCtrlMsg(SRpcMsg *pMsg) { return 0; }
+
 int32_t mndProcessSyncMsg(SRpcMsg *pMsg) {
   SMnode    *pMnode = pMsg->info.node;
   SSyncMgmt *pMgmt = &pMnode->syncMgmt;

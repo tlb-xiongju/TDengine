@@ -473,6 +473,15 @@ int32_t vnodeProcessSyncMsg(SVnode *pVnode, SRpcMsg *pMsg, SRpcMsg **pRsp) {
   return code;
 }
 
+static int32_t vnodeSyncEqCtrlMsg(const SMsgCb *msgcb, SRpcMsg *pMsg) {
+  int32_t code = tmsgPutToQueue(msgcb, SYNC_CTRL_QUEUE, pMsg);
+  if (code != 0) {
+    rpcFreeCont(pMsg->pCont);
+    pMsg->pCont = NULL;
+  }
+  return code;
+}
+
 static int32_t vnodeSyncEqMsg(const SMsgCb *msgcb, SRpcMsg *pMsg) {
   int32_t code = tmsgPutToQueue(msgcb, SYNC_QUEUE, pMsg);
   if (code != 0) {
@@ -740,6 +749,7 @@ int32_t vnodeSyncOpen(SVnode *pVnode, char *path) {
       .msgcb = NULL,
       .FpSendMsg = vnodeSyncSendMsg,
       .FpEqMsg = vnodeSyncEqMsg,
+      .FpEqCtrlMsg = vnodeSyncEqCtrlMsg,
   };
 
   snprintf(syncInfo.path, sizeof(syncInfo.path), "%s%ssync", path, TD_DIRSEP);

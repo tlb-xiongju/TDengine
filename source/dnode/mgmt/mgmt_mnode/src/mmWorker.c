@@ -296,5 +296,6 @@ void mmStopWorker(SMnodeMgmt *pMgmt) {
   tSingleWorkerCleanup(&pMgmt->readWorker);
   tSingleWorkerCleanup(&pMgmt->writeWorker);
   tSingleWorkerCleanup(&pMgmt->syncWorker);
+  tSingleWorkerCleanup(&pMgmt->syncCtrlWorker);
   dDebug("mnode workers are closed");
 }

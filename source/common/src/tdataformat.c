@@ -30,7 +30,7 @@ typedef struct {
 
 #define TSROW_IS_KV_ROW(r) ((r)->flags & TSROW_KV_ROW)
 
-// SValue
+// SValue ========================================================================
 int32_t tPutValue(uint8_t *p, SValue *pValue, int8_t type) {
   int32_t n = 0;
 
@@ -131,11 +131,6 @@ int32_t tGetValue(uint8_t *p, SValue *pValue, int8_t type) {
   }
 
   return n;
-}
-
-int tValueCmprFn(const SValue *pValue1, const SValue *pValue2, int8_t type) {
-  // TODO
-  return 0;
 }
 
 // STSRow2 ========================================================================
@@ -680,7 +675,7 @@ int32_t tGetTSRow(uint8_t *p, STSRow2 **ppRow) {
   return n;
 }
 
-// STSchema
+// STSchema ========================================================================
 int32_t tTSchemaCreate(int32_t sver, SSchema *pSchema, int32_t ncols, STSchema **ppTSchema) {
   *ppTSchema = (STSchema *)taosMemoryMalloc(sizeof(STSchema) + sizeof(STColumn) * ncols);
   if (*ppTSchema == NULL) {
@@ -732,6 +727,7 @@ static int tTagValCmprFn(const void *p1, const void *p2) {
 
   return 0;
 }
+
 static int tTagValJsonCmprFn(const void *p1, const void *p2) {
   return strcmp(((STagVal *)p1)[0].pKey, ((STagVal *)p2)[0].pKey);
 }
@@ -850,6 +846,7 @@ static int32_t tPutTagVal(uint8_t *p, STagVal *pTagVal, int8_t isJson) {
 
   return n;
 }
+
 static int32_t tGetTagVal(uint8_t *p, STagVal *pTagVal, int8_t isJson) {
   int32_t n = 0;
 
